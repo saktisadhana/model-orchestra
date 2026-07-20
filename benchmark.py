@@ -21,8 +21,8 @@ import time
 
 from server import chat  # reuses the same providers/keys as the MCP server
 
-SINGLE = "cheap"                        # BEFORE: one model
-SWARM = ["cheap", "fast", "coder"]      # AFTER: run these in parallel
+SINGLE = "flash"                        # BEFORE: one cheap worker
+SWARM = ["flash", "mimo", "ds-pro"]     # AFTER: swarm of 3 cheap coders, in parallel
 ROOT = pathlib.Path(__file__).parent
 
 # Each task: a function to write + asserts that must pass. Weak models fail some
@@ -142,9 +142,11 @@ def main():
         f"| AFTER (swarm)   | {a_pass/n*100:.0f}% | {a_pass}/{n} | {a_lat:.1f}s |",
         "",
         f"**Reliability delta: +{(a_pass-b_pass)/n*100:.0f} percentage points** "
-        f"({b_pass}/{n} -> {a_pass}/{n} solved). "
-        f"Cost trade: swarm spends ~{len(SWARM)}x the tokens (N workers per task); "
-        "latency stays close to a single call because workers run in parallel.",
+        f"({b_pass}/{n} -> {a_pass}/{n} solved). On this mechanical set a single "
+        f"cheap worker already scores {b_pass}/{n}, so delegating it is lossless — "
+        "that is the point (see PROOF.md for the cost this saves). The swarm spends "
+        f"~{len(SWARM)}x the tokens for best-of-N insurance; keep it for genuinely "
+        "hard problems where one model is flaky, not for easy grunt work.",
         "",
         "## Per-task",
         "",

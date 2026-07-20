@@ -81,11 +81,14 @@ def resolve(model: str) -> tuple[str, str]:
     return provider, model_id
 
 
-def client_for(provider: str) -> OpenAI:
+def client_for(provider: str):
     p = PROVIDERS[provider]
     key = os.environ.get(p["api_key_env"])
     if not key:
         raise RuntimeError(f"Missing env var {p['api_key_env']} for provider {provider!r}.")
+    if p.get("client") == "anthropic":
+        import anthropic
+        return anthropic.Anthropic(base_url=p["base_url"], api_key=key)
     return OpenAI(base_url=p["base_url"], api_key=key)
 
 
@@ -142,12 +145,14 @@ def _is_transient(e: Exception) -> bool:
 
 
 def _create_with_retry(client, *, retries: int = 3, backoff: float = 0.8, **kwargs):
-    """create() with backoff on transient upstream errors only (fixes k27/k3
-    flakiness). Genuine client errors raise immediately."""
+    """create() with backoff on transient upstream errors only."""
     kwargs.setdefault("timeout", REQUEST_TIMEOUT)
+    is_anthropic = hasattr(client, "messages")
     last = None
     for i in range(retries):
         try:
+            if is_anthropic:
+                return client.messages.create(**kwargs)
             return client.chat.completions.create(**kwargs)
         except Exception as e:
             last = e
@@ -160,10 +165,25 @@ def _create_with_retry(client, *, retries: int = 3, backoff: float = 0.8, **kwar
 def chat(model: str, prompt: str, system: str = "", temperature: float = 0.2) -> str:
     """One-shot text completion against a worker. Shared by delegate + swarm."""
     provider, model_id = resolve(model)
+    client = client_for(provider)
+    is_anthropic = hasattr(client, "messages")
+
+    if is_anthropic:
+        kwargs = dict(model=model_id, max_tokens=4096, temperature=temperature,
+                      messages=[{"role": "user", "content": prompt}])
+        if system:
+            kwargs["system"] = system
+        r = _create_with_retry(client, **kwargs)
+        
+        class FakeUsage:
+            prompt_tokens = r.usage.input_tokens
+            completion_tokens = r.usage.output_tokens
+        _track(model, FakeUsage())
+        return _truncate(r.content[0].text or "")
+
     msgs = ([{"role": "system", "content": system}] if system else []) + \
            [{"role": "user", "content": prompt}]
-    r = _create_with_retry(client_for(provider),
-                           model=model_id, messages=msgs, temperature=temperature)
+    r = _create_with_retry(client, model=model_id, messages=msgs, temperature=temperature)
     _track(model, r.usage)
     return _truncate(r.choices[0].message.content or "")
 
@@ -261,8 +281,17 @@ def delegate(task: str, model: str = "flash", agent: bool = False,
     """Send task to a worker. model: alias or provider/id. agent=True for tool loop."""
     provider, model_id = resolve(model)
     cli = client_for(provider)
+    is_anthropic = hasattr(cli, "messages")
 
     if not agent:
+        if is_anthropic:
+            kwargs = dict(model=model_id, max_tokens=4096, messages=[{"role": "user", "content": task}])
+            if system:
+                kwargs["system"] = system
+            r = _create_with_retry(cli, **kwargs)
+            _track(model, type("Usage", (), {"prompt_tokens": r.usage.input_tokens, "completion_tokens": r.usage.output_tokens})())
+            return _truncate(r.content[0].text or "(empty response)")
+        
         msgs = ([{"role": "system", "content": system}] if system else []) + \
                [{"role": "user", "content": task}]
         r = _create_with_retry(cli, model=model_id, messages=msgs)
@@ -273,11 +302,45 @@ def delegate(task: str, model: str = "flash", agent: bool = False,
     ws.mkdir(parents=True, exist_ok=True)
     sys_prompt = (system or "You are a coding worker. Use the tools to complete the "
                   "task in the workspace, then reply with a short summary of what you did.")
+                  
+    if is_anthropic:
+        # Translate OpenAI tools to Anthropic format
+        anthropic_tools = [
+            {"name": t["function"]["name"], "description": t["function"]["description"], "input_schema": t["function"]["parameters"]}
+            for t in AGENT_TOOLS
+        ]
+        msgs = [{"role": "user", "content": task}]
+        
+        for _ in range(MAX_STEPS):
+            r = _create_with_retry(cli, model=model_id, max_tokens=4096, system=sys_prompt, messages=msgs, tools=anthropic_tools)
+            _track(model, type("Usage", (), {"prompt_tokens": r.usage.input_tokens, "completion_tokens": r.usage.output_tokens})())
+            
+            msgs.append({"role": "assistant", "content": r.content})
+            if r.stop_reason != "tool_use":
+                text_blocks = [b.text for b in r.content if b.type == "text"]
+                return _truncate("\n".join(text_blocks) or "(done, no summary)")
+                
+            tool_results = []
+            for block in r.content:
+                if block.type == "tool_use":
+                    try:
+                        out = run_tool(block.name, block.input, ws)
+                    except Exception as e:
+                        out = f"ERROR: {e}"
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": out
+                    })
+            msgs.append({"role": "user", "content": tool_results})
+        return f"(hit agent_max_steps={MAX_STEPS} without finishing)"
+
+    # OpenAI loop
     msgs = [{"role": "system", "content": sys_prompt},
             {"role": "user", "content": task}]
 
     for _ in range(MAX_STEPS):
-        r = cli.chat.completions.create(model=model_id, messages=msgs, tools=AGENT_TOOLS)
+        r = _create_with_retry(cli, model=model_id, messages=msgs, tools=AGENT_TOOLS)
         _track(model, r.usage)
         m = r.choices[0].message
         msgs.append(m.model_dump(exclude_none=True))

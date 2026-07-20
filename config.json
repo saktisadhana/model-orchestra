@@ -19,6 +19,11 @@
     "sambanova": {
       "base_url": "https://api.sambanova.ai/v1",
       "api_key_env": "SAMBANOVA_API_KEY"
+    },
+    "68886868": {
+      "base_url": "https://api.68886868.xyz",
+      "api_key_env": "API_68886868_KEY",
+      "client": "anthropic"
     }
   },
 
@@ -33,6 +38,7 @@
     "glm51":        "opencode-go/glm-5.1",
     "grok":         "opencode-go/grok-4.5",
     "k3":           "opencode-go/kimi-k3",
+    "opus-sub":     "68886868/gpt-5.6-sol",
 
     "fast-nv":      "nvidia/meta/llama-3.1-8b-instruct",
     "glm-nv":       "nvidia/z-ai/glm-5.2",
@@ -91,7 +97,7 @@
   },
 
   "tiers": {
-    "strong": ["k26", "glm", "grok", "glm51", "k27", "k3"],
+    "strong": ["k26", "glm", "grok", "glm51", "k27", "k3", "opus-sub"],
     "cheap": ["flash", "mimo", "ds-pro", "mimo-pro"]
   },
 

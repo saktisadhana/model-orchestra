@@ -2,28 +2,28 @@
 
 Real run, 6 coding tasks, results verified by executing the generated code against unit tests. Numbers are from live API calls — rerun to reproduce.
 
-- **BEFORE** — single model (`cheap`), one attempt per task.
-- **AFTER** — swarm `cheap, fast, coder` run in parallel; task counts as solved if ANY worker's code passes the tests (verified best-of-N).
+- **BEFORE** — single model (`flash`), one attempt per task.
+- **AFTER** — swarm `flash, mimo, ds-pro` run in parallel; task counts as solved if ANY worker's code passes the tests (verified best-of-N).
 
 ## Result
 
 | | Pass rate | Tasks solved | Total latency |
 |---|---|---|---|
-| BEFORE (single) | 83% | 5/6 | 29.8s |
-| AFTER (swarm)   | 100% | 6/6 | 31.6s |
+| BEFORE (single) | 100% | 6/6 | 66.1s |
+| AFTER (swarm)   | 100% | 6/6 | 205.7s |
 
-**Reliability delta: +17 percentage points** (5/6 -> 6/6 solved). Cost trade: swarm spends ~3x the tokens (N workers per task); latency stays close to a single call because workers run in parallel.
+**Reliability delta: +0 percentage points** (6/6 -> 6/6 solved). On this mechanical set a single cheap worker already scores 6/6, so delegating it is lossless — that is the point (see PROOF.md for the cost this saves). The swarm spends ~3x the tokens for best-of-N insurance; keep it for genuinely hard problems where one model is flaky, not for easy grunt work.
 
 ## Per-task
 
 | Task | BEFORE | AFTER | solved by (swarm) |
 |---|---|---|---|
-| string_to_int_atoi | PASS 7.9s | PASS 5.9s | cheap, fast |
-| coin_change | PASS 5.5s | PASS 5.1s | cheap, fast, coder |
-| word_break | PASS 3.6s | PASS 3.8s | cheap, fast |
-| eval_rpn | fail 5.4s | PASS 5.8s | cheap, fast, coder |
-| decode_ways | PASS 6.3s | PASS 5.2s | cheap, fast |
-| spiral_order | PASS 1.0s | PASS 5.8s | cheap, fast |
+| string_to_int_atoi | PASS 15.5s | PASS 26.9s | flash, mimo, ds-pro |
+| coin_change | PASS 6.4s | PASS 12.6s | flash, mimo, ds-pro |
+| word_break | PASS 14.8s | PASS 25.1s | flash, mimo, ds-pro |
+| eval_rpn | PASS 9.3s | PASS 20.5s | flash, mimo, ds-pro |
+| decode_ways | PASS 11.6s | PASS 41.3s | flash, mimo, ds-pro |
+| spiral_order | PASS 8.6s | PASS 79.2s | flash, mimo, ds-pro |
 
 ## How to read this
 
