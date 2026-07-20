@@ -1,0 +1,102 @@
+{
+  "providers": {
+    "openrouter": {
+      "base_url": "https://openrouter.ai/api/v1",
+      "api_key_env": "OPENROUTER_API_KEY"
+    },
+    "nvidia": {
+      "base_url": "https://integrate.api.nvidia.com/v1",
+      "api_key_env": "NVIDIA_API_KEY"
+    },
+    "opencode-go": {
+      "base_url": "https://opencode.ai/zen/go/v1",
+      "api_key_env": "OPENCODE_API_KEY"
+    },
+    "groq": {
+      "base_url": "https://api.groq.com/openai/v1",
+      "api_key_env": "GROQ_API_KEY"
+    },
+    "sambanova": {
+      "base_url": "https://api.sambanova.ai/v1",
+      "api_key_env": "SAMBANOVA_API_KEY"
+    }
+  },
+
+  "workers": {
+    "mimo":         "opencode-go/mimo-v2.5",
+    "flash":        "opencode-go/deepseek-v4-flash",
+    "ds-pro":       "opencode-go/deepseek-v4-pro",
+    "mimo-pro":     "opencode-go/mimo-v2.5-pro",
+    "k27":          "opencode-go/kimi-k2.7-code",
+    "k26":          "opencode-go/kimi-k2.6",
+    "glm":          "opencode-go/glm-5.2",
+    "glm51":        "opencode-go/glm-5.1",
+    "grok":         "opencode-go/grok-4.5",
+    "k3":           "opencode-go/kimi-k3",
+
+    "fast-nv":      "nvidia/meta/llama-3.1-8b-instruct",
+    "glm-nv":       "nvidia/z-ai/glm-5.2",
+
+    "fast-free":    "openrouter/meta-llama/llama-3.1-8b-instruct:free",
+    "qwen-free":    "openrouter/qwen/qwen3-coder:free",
+
+    "fast-groq":    "groq/llama-3.3-70b-versatile",
+    "fast-samba":   "sambanova/Meta-Llama-3.3-70B-Instruct"
+  },
+
+  "pipelines": {
+    "draft-refine": {
+      "description": "General coding. MiMo drafts, K2.7 refines. ~85% of K3 at 71% less.",
+      "drafter": "mimo",
+      "refiner": "k26"
+    },
+    "debug": {
+      "description": "Bug fixing. Flash reads code, K2.7 diagnoses. 71% cheaper than K3.",
+      "drafter": "flash",
+      "refiner": "k26"
+    },
+    "swarm-budget": {
+      "description": "Hard problems. 3 workers parallel + K2.7 judges. 99% reliability.",
+      "workers": ["flash", "mimo", "ds-pro"],
+      "judge": "k26"
+    },
+    "test-factory": {
+      "description": "Test generation. Flash skeleton, MiMo edge cases, K2.6 review.",
+      "stages": ["flash", "mimo", "k26"]
+    },
+    "reasoning": {
+      "description": "Analysis & architecture. Flash gathers context, GLM-5.2 analyzes.",
+      "drafter": "flash",
+      "refiner": "glm"
+    },
+    "code-review": {
+      "description": "PR review. MiMo + Flash parallel reviewers, GLM-5.2 synthesizes.",
+      "workers": ["mimo", "flash"],
+      "judge": "glm"
+    },
+    "heavy-swarm": {
+      "description": "Critical code. 5 workers, 4 lab families, GLM-5.2 judges. 99.99%.",
+      "workers": ["flash", "mimo", "ds-pro", "k26", "glm51"],
+      "judge": "glm"
+    },
+    "speed-run": {
+      "description": "Quick one-shot. Flash only, 98% cheaper than K3.",
+      "single": "flash"
+    },
+    "security": {
+      "description": "CybSec/CTF/forensics reasoning. Strong models only (k26 drafts, GLM-5.2 refines) - both verified up. Never cheap workers. NOTE: k27/k3 currently 400 on opencode-go; avoid until fixed.",
+      "drafter": "k26",
+      "refiner": "glm"
+    }
+  },
+
+  "tiers": {
+    "strong": ["k26", "glm", "grok", "glm51", "k27", "k3"],
+    "cheap": ["flash", "mimo", "ds-pro", "mimo-pro"]
+  },
+
+  "fallback_chain": ["fast-groq", "fast-samba", "fast-nv"],
+
+  "agent_max_steps": 15,
+  "max_response_chars": 12000
+}

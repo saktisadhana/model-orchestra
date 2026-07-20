@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "model-orchestra": {
+      "command": "python",
+      "args": [
+        "server.py"
+      ]
+    }
+  }
+}

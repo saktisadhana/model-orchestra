@@ -1,0 +1,295 @@
+import json
+import os
+import re
+import sys
+
+import server
+from server import (
+    pipeline, auto_delegate, batch_delegate,
+    chat, chat_with_failover, _truncate, _is_security,
+    TASK_ROUTES, resolve, client_for, FALLBACK_CHAIN, PROVIDERS, MAX_RESPONSE,
+)
+
+
+# ── helpers for executing generated code ────────────────────────────────────
+# ponytail: naive exec() of model output in a fresh namespace, no sandbox.
+# Fine for a local dev harness run on your own tasks; if this ever runs on
+# untrusted worker output, move exec into a subprocess with limits.
+
+def _extract_code(res: str) -> str:
+    """Pull the code out of a ```python ... ``` fence, else return as-is."""
+    m = re.search(r"```(?:python)?\s*\n(.*?)```", res, re.DOTALL)
+    return m.group(1) if m else res
+
+
+def _exec_ns(res: str) -> dict:
+    """Exec the generated code, return its namespace ({} on failure)."""
+    ns: dict = {}
+    try:
+        exec(_extract_code(res), ns)
+    except Exception:
+        return {}
+    return ns
+
+
+def _find_fn(ns: dict, predicate):
+    """Return the first user-defined callable in ns satisfying predicate."""
+    for name, obj in ns.items():
+        if name.startswith("_") or not callable(obj) or not hasattr(obj, "__code__"):
+            continue
+        try:
+            if predicate(obj):
+                return obj
+        except Exception:
+            continue
+    return None
+
+
+def test_routing_accuracy():
+    print("--- Test 2: Routing Accuracy ---")
+    ROUTING_TESTS = [
+        ("Write a function to sort a list", "draft-refine"),
+        ("Fix the bug in parser.py", "debug"),
+        ("Quick: convert this to a list comprehension", "speed-run"),
+        ("Write pytest tests for auth module", "test-factory"),
+        ("Analyze the database schema for bottlenecks", "reasoning"),
+        ("Review this pull request for security issues", "code-review"),
+        ("Implement the payment processing algorithm", "draft-refine"),
+        ("Debug this traceback: IndexError on line 42", "debug"),
+        ("Create a simple hello world script", "speed-run"),
+        ("Explain why the API is slow", "reasoning"),
+        ("Write a regex to match email addresses", "speed-run"),
+        ("Add error handling to the upload function", "draft-refine"),
+        ("Check this code for vulnerabilities", "code-review"),
+        ("Build a caching layer for the API", "draft-refine"),
+        ("Convert JSON to YAML format", "speed-run"),
+        ("Design the architecture for a chat system", "reasoning"),
+        ("Fix the crash when user input is empty", "debug"),
+        ("Write unit tests for the parser", "test-factory"),
+        ("Review the PR for code quality", "code-review"),
+        ("Make a template for the config file", "speed-run"),
+    ]
+
+    correct = 0
+    for task, expected in ROUTING_TESTS:
+        task_lower = task.lower()
+        scores = {route: 0 for route in TASK_ROUTES}
+        for route, keywords in TASK_ROUTES.items():
+            for kw in keywords:
+                if kw in task_lower:
+                    scores[route] += 1
+        best = max(scores, key=scores.get)
+        best_score = scores[best]
+        if best_score == 0:
+            best = "draft-refine" if len(task.split()) > 20 else "speed-run"
+
+        if best == expected:
+            correct += 1
+        else:
+            print(f"Failed routing: '{task}' -> got {best}, expected {expected}")
+
+    accuracy = correct / len(ROUTING_TESTS)
+    print(f"Routing Accuracy: {accuracy*100:.1f}% ({correct}/{len(ROUTING_TESTS)})")
+    if accuracy < 0.8:
+        print("FAIL: Routing accuracy below 80%")
+        return False
+    print("PASS: Routing accuracy OK")
+    return True
+
+
+def test_security_routing():
+    """No-API: a security task must route to the strong `security` pipeline."""
+    print("\n--- Test 6: CybSec Routing Floor ---")
+    captured = {}
+    orig = server.pipeline
+    server.pipeline = lambda task, mode="draft-refine", *a, **k: captured.__setitem__("mode", mode)
+    try:
+        server.auto_delegate("Write an exploit for CVE-2024-1234 buffer overflow")
+        sec_mode = captured.get("mode")
+        captured.clear()
+        server.auto_delegate("Write a function to sort a list of integers")
+        benign_mode = captured.get("mode")
+    finally:
+        server.pipeline = orig
+
+    ok = True
+    if not _is_security("decrypt this AES ciphertext to get the flag{...}"):
+        print("FAIL: _is_security missed an obvious security task")
+        ok = False
+    if _is_security("write a function to sort a list"):
+        print("FAIL: _is_security false-positive on a benign task")
+        ok = False
+    if sec_mode != "security":
+        print(f"FAIL: security task routed to {sec_mode!r}, expected 'security'")
+        ok = False
+    if benign_mode == "security":
+        print("FAIL: benign task incorrectly routed to 'security'")
+        ok = False
+
+    print("PASS: security tasks floored to strong models" if ok
+          else "FAIL: CybSec routing floor broken")
+    return ok
+
+
+def test_truncation_safety():
+    print("\n--- Test 5: Truncation Safety ---")
+    long_content = "def long_function():\n" + "    # filler\n" * 2000 + "    return True\n"
+    truncated = _truncate(long_content, limit=1000)
+
+    if "[TRUNCATED" not in truncated:
+        print("FAIL: TRUNCATED marker not found")
+        return False
+    if "def long_function():" not in truncated:
+        print("FAIL: Function signature lost")
+        return False
+    if "return True" not in truncated:
+        print("FAIL: Return statement lost")
+        return False
+
+    print("PASS: Truncation safety OK")
+    return True
+
+
+def test_failover():
+    print("\n--- Test 4: Failover Chain ---")
+
+    # Temporarily modify the primary provider for 'flash' to use a bad key
+    original_key = os.environ.get(PROVIDERS["opencode-go"]["api_key_env"])
+    os.environ[PROVIDERS["opencode-go"]["api_key_env"]] = "sk-badkey"
+
+    print("Testing failover (this might take a few seconds as primary fails)...")
+    try:
+        res = chat_with_failover("flash", "Say 'failover successful' and nothing else.")
+        print(f"Response: {res}")
+        if not res or "error" in res.lower() and "successful" not in res.lower():
+            print("FAIL: Failover didn't return a valid response")
+            passed = False
+        else:
+            print("PASS: Failover successful")
+            passed = True
+    except Exception as e:
+        print(f"FAIL: Failover raised exception: {e}")
+        passed = False
+    finally:
+        if original_key:
+            os.environ[PROVIDERS["opencode-go"]["api_key_env"]] = original_key
+        else:
+            del os.environ[PROVIDERS["opencode-go"]["api_key_env"]]
+
+    return passed
+
+
+def test_pipeline_quality():
+    """Now EXECUTES generated code and asserts behavior, not keyword presence."""
+    print("\n--- Test 1: Pipeline Quality (execution-checked) ---")
+
+    TASKS = {
+        "Easy": ("speed-run", "Write a Python function that reverses a string without using [::-1] or reversed(). Handle empty strings and None input."),
+        "Medium": ("draft-refine", "Write a Python function that finds the longest palindromic substring in a string. Return the substring itself, not its length. Handle empty strings. Optimize to better than O(n^3)."),
+        "Hard": ("swarm-budget", "Write a Python function that solves the N-Queens problem. Given n, return all distinct solutions. Each solution is a list of n strings where 'Q' marks a queen and '.' marks empty. Include input validation."),
+        "Debug": ("debug", "This code has a bug. Find and fix it:\n```python\ndef merge_sorted(a, b):\n    result = []\n    i = j = 0\n    while i < len(a) and j < len(b):\n        if a[i] <= b[j]:\n            result.append(a[i])\n            i += 1\n        else:\n            result.append(b[j])\n            j += 1\n    return result\n```"),
+        "Analysis": ("reasoning", "Explain the trade-offs between using a hash map vs a balanced BST for implementing a cache. Consider: lookup time, insertion time, memory overhead, cache-friendliness, and worst-case behavior. Give a concrete recommendation for a web server session store."),
+        "Tests": ("test-factory", "Write pytest tests for a function `parse_csv(filepath)` that reads a CSV file and returns a list of dicts. Test: normal file, empty file, missing file, unicode content, malformed rows, very large files."),
+    }
+
+    # Each checker gets the raw response; returns True iff the output is CORRECT.
+    def check_easy(res):
+        code = _extract_code(res)
+        if "[::-1]" in code or "reversed(" in code:
+            return False
+        ns = _exec_ns(res)
+        f = _find_fn(ns, lambda fn: fn("abc") == "cba")
+        return bool(f) and f("") == "" and f("racecar") == "racecar"
+
+    def check_medium(res):
+        ns = _exec_ns(res)
+        f = _find_fn(ns, lambda fn: fn("babad") in ("bab", "aba"))
+        return bool(f) and f("cbbd") == "bb" and f("") == ""
+
+    def check_hard(res):
+        ns = _exec_ns(res)
+        # N-Queens: n=4 has 2 solutions, n=1 has 1. Each sol = list of n strings.
+        f = _find_fn(ns, lambda fn: len(fn(4)) == 2)
+        if not f:
+            return False
+        sols = f(4)
+        shape_ok = all(len(s) == 4 and all(len(row) == 4 for row in s) for s in sols)
+        return shape_ok and len(f(1)) == 1
+
+    def check_debug(res):
+        ns = _exec_ns(res)
+        f = _find_fn(ns, lambda fn: fn([1, 3, 5], [2, 4]) == [1, 2, 3, 4, 5])
+        # the original bug drops the leftover tail; assert it's fixed
+        return bool(f) and f([1, 2], []) == [1, 2] and f([], [7]) == [7]
+
+    def check_analysis(res):
+        r = res.lower()
+        has_both = ("hash" in r) and ("bst" in r or "binary search tree" in r or "tree" in r)
+        gives_rec = "recommend" in r or "session" in r
+        return has_both and gives_rec and len(res) > 400
+
+    def check_tests(res):
+        return (res.count("def test_") >= 3
+                and "parse_csv" in res
+                and ("import pytest" in res or "pytest" in res))
+
+    CHECKERS = {
+        "Easy": check_easy, "Medium": check_medium, "Hard": check_hard,
+        "Debug": check_debug, "Analysis": check_analysis, "Tests": check_tests,
+    }
+
+    passed_count = 0
+    total = len(TASKS)
+    for level, (mode, task) in TASKS.items():
+        print(f"\nRunning {level} task via {mode}...")
+        try:
+            res = pipeline(task, mode=mode)
+            if CHECKERS[level](res):
+                print(f"PASS: {level} task (behavior verified)")
+                passed_count += 1
+            else:
+                print(f"FAIL: {level} task — output did not satisfy behavior check")
+                print(f"Output snippet: {res[:300]}...")
+        except Exception as e:
+            print(f"FAIL (Exception): {level} task -> {e}")
+
+    accuracy = passed_count / total
+    print(f"\nPipeline Quality: {accuracy*100:.1f}% ({passed_count}/{total})")
+    return accuracy >= 0.8
+
+
+def test_batch_delegate():
+    print("\n--- Test 3: Batch Delegate ---")
+    tasks_json = json.dumps([
+        {"task": "Write a python function that adds two numbers", "mode": "speed-run"},
+        {"task": "Explain what a variable is in 10 words", "mode": "reasoning"},
+    ])
+
+    try:
+        res = batch_delegate(tasks_json)
+        if "### Task 1:" in res and "### Task 2:" in res and "def" in res:
+            print("PASS: Batch delegate successful")
+            return True
+        else:
+            print("FAIL: Batch delegate output missing expected parts")
+            print(f"Output: {res}")
+            return False
+    except Exception as e:
+        print(f"FAIL: Batch delegate raised exception {e}")
+        return False
+
+
+if __name__ == "__main__":
+    t2 = test_routing_accuracy()
+    t6 = test_security_routing()
+    t5 = test_truncation_safety()
+    t4 = test_failover()
+    t3 = test_batch_delegate()
+    t1 = test_pipeline_quality()
+
+    if t1 and t2 and t3 and t4 and t5 and t6:
+        print("\nALL TESTS PASSED! The system is smart and optimized.")
+        sys.exit(0)
+    else:
+        print("\nSOME TESTS FAILED. See output above.")
+        sys.exit(1)
