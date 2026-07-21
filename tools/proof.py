@@ -13,9 +13,13 @@ $75/M supervisor and onto a $0.28/M worker, with no loss on mechanical work
 Run:  python proof.py
 """
 
+import hashlib
 import pathlib
+from datetime import datetime, timezone
 
-from server import chat, SESSION_USAGE
+import sys
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+from server import SESSION_USAGE, WORKERS, chat
 
 WORKER = "flash"  # opencode-go/deepseek-v4-flash — a $0.28/M cheap worker
 
@@ -26,6 +30,15 @@ PRICE = {
     "flash": (0.28, 0.28),
     "opus": (15.00, 75.00),
 }
+PRICE_SNAPSHOT_DATE = "2026-07-21"
+PRICED_WORKER_MODEL = "opencode-go/deepseek-v4-flash"
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+
+
+def provenance() -> tuple[str, str]:
+    generated = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    config_hash = hashlib.sha256((ROOT / "config.json").read_bytes()).hexdigest()[:12]
+    return generated, config_hash
 
 # Legitimate delegation targets: mechanical/bulk codegen, the ~85% of work a
 # supervisor should never spend $75/M output tokens writing itself.
@@ -46,6 +59,12 @@ TASKS = [
 
 
 def main():
+    resolved_worker = WORKERS.get(WORKER, WORKER)
+    if resolved_worker != PRICED_WORKER_MODEL:
+        raise RuntimeError(
+            f"Price snapshot targets {PRICED_WORKER_MODEL!r}, but {WORKER!r} now "
+            f"resolves to {resolved_worker!r}. Verify pricing and update proof.py."
+        )
     print(f"Running cost proof: {len(TASKS)} grunt tasks on '{WORKER}' (real API)...\n")
     for i, t in enumerate(TASKS, 1):
         out = chat(WORKER, t)
@@ -53,6 +72,7 @@ def main():
 
     u = SESSION_USAGE
     inp, out = u["total_input_tokens"], u["total_output_tokens"]
+    generated, config_hash = provenance()
 
     w_in, w_out = PRICE["flash"]
     o_in, o_out = PRICE["opus"]
@@ -65,8 +85,13 @@ def main():
         "# model-orchestra — cost proof",
         "",
         f"Real run, {len(TASKS)} mechanical codegen tasks sent to the cheap worker "
-        f"`{WORKER}`. Token counts below are returned by the live API — rerun to "
+        f"`{WORKER}`. Token counts below are returned by the live API - rerun to "
         "reproduce (small variance from model non-determinism).",
+        "",
+        f"- Generated UTC: `{generated}`",
+        f"- config SHA-256: `{config_hash}`",
+        f"- Worker model at generation: `{resolved_worker}`",
+        f"- Pricing snapshot: `{PRICE_SNAPSHOT_DATE}` (manual assumptions in `proof.py`; verify before reuse)",
         "",
         "## Measured usage",
         "",
@@ -97,11 +122,10 @@ def main():
         "in code).",
         "",
     ]
-    pathlib.Path(__file__).parent.joinpath("PROOF.md").write_text(
-        "\n".join(lines), encoding="utf-8")
+    (ROOT / "docs" / "PROOF.md").write_text("\n".join(lines), encoding="utf-8")
 
     print(f"\nWorker ${worker_cost:.4f}  vs  Opus ${opus_cost:.4f}"
-          f"   ({factor:.0f}x cheaper, {savings_pct:.1f}% saved)   (wrote PROOF.md)")
+          f"   ({factor:.0f}x cheaper, {savings_pct:.1f}% saved)   (wrote docs/PROOF.md)")
 
 
 if __name__ == "__main__":

@@ -3,7 +3,7 @@
     "model-orchestra": {
       "command": "python",
       "args": [
-        "server.py"
+        "C:/Users/Sakti Sadhana/Project/model-orchestra/server.py"
       ]
     }
   }

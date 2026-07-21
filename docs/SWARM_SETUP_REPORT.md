@@ -1,6 +1,10 @@
 # Swarm Setup Report — Opus-supervised tiny-model orchestra
 
-**Goal:** Opus 4.8 (Claude Code) plans and supervises; cheap models on OpenRouter,
+**Historical snapshot:** This report documents the original Opus 4.8-era setup and
+benchmark. It is retained for provenance; it does not describe the current Zed
+profile or routing defaults.
+
+**Original goal:** Opus 4.8 (Claude Code) planned and supervised; cheap models on OpenRouter,
 NVIDIA, and OpenCode Go do the grunt work — a Kimi-style "fan out, keep the best"
 experience. This report analyses your installed plugins, three reference repos,
 how Kimi's swarm works, what was built, and a **real before/after benchmark**.

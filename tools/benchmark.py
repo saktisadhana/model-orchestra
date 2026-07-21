@@ -12,18 +12,27 @@ Run:  python benchmark.py
 """
 
 import concurrent.futures as cf
+import hashlib
 import pathlib
 import re
 import subprocess
 import sys
 import tempfile
 import time
+from datetime import datetime, timezone
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 from server import chat  # reuses the same providers/keys as the MCP server
 
 SINGLE = "flash"                        # BEFORE: one cheap worker
 SWARM = ["flash", "mimo", "ds-pro"]     # AFTER: swarm of 3 cheap coders, in parallel
-ROOT = pathlib.Path(__file__).parent
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+
+
+def provenance() -> tuple[str, str]:
+    generated = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    config_hash = hashlib.sha256((ROOT / "config.json").read_bytes()).hexdigest()[:12]
+    return generated, config_hash
 
 # Each task: a function to write + asserts that must pass. Weak models fail some
 # of these alone; the point is to measure how much a swarm recovers.
@@ -124,11 +133,17 @@ def main():
               f"(solved_by={a.get('solved_by')})")
 
     n = len(TASKS)
+    generated, config_hash = provenance()
     lines = [
-        "# model-orchestra — swarm benchmark",
+        "# model-orchestra - swarm benchmark",
         "",
         f"Real run, {n} coding tasks, results verified by executing the generated code "
-        "against unit tests. Numbers are from live API calls — rerun to reproduce.",
+        "against unit tests. Numbers are from live API calls - rerun to reproduce.",
+        "",
+        f"- Generated UTC: `{generated}`",
+        f"- config SHA-256: `{config_hash}`",
+        f"- Single model at generation: `{SINGLE}`",
+        f"- Swarm models at generation: `{', '.join(SWARM)}`",
         "",
         f"- **BEFORE** — single model (`{SINGLE}`), one attempt per task.",
         f"- **AFTER** — swarm `{', '.join(SWARM)}` run in parallel; task counts as solved "
@@ -166,8 +181,8 @@ def main():
               "that in tokens, not wall-clock time. This is the cheap-model version of the "
               "Kimi K2 swarm: fan out, then keep the best.", ""]
 
-    (ROOT / "REPORT.md").write_text("\n".join(lines), encoding="utf-8")
-    print(f"\nBEFORE {b_pass}/{n}  ->  AFTER {a_pass}/{n}   (wrote REPORT.md)")
+    (ROOT / "docs" / "REPORT.md").write_text("\n".join(lines), encoding="utf-8")
+    print(f"\nBEFORE {b_pass}/{n}  ->  AFTER {a_pass}/{n}   (wrote docs/REPORT.md)")
 
 
 if __name__ == "__main__":

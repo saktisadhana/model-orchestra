@@ -2,6 +2,8 @@ import json
 import os
 import re
 import sys
+import pathlib
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 import server
 from server import (
@@ -16,20 +18,39 @@ from server import (
 # Fine for a local dev harness run on your own tasks; if this ever runs on
 # untrusted worker output, move exec into a subprocess with limits.
 
+def _code_blocks(res: str) -> list[str]:
+    """Every ```python ... ``` fence, else the whole response.
+
+    Cheap workers often emit several blocks (a naive version, then an optimized
+    one, then example usage), so keying off only the first fence reports a
+    correct answer as a failure.
+    """
+    return re.findall(r"```(?:python)?\s*\n(.*?)```", res, re.DOTALL) or [res]
+
+
 def _extract_code(res: str) -> str:
-    """Pull the code out of a ```python ... ``` fence, else return as-is."""
-    m = re.search(r"```(?:python)?\s*\n(.*?)```", res, re.DOTALL)
-    return m.group(1) if m else res
+    """All generated code joined, for whole-response keyword checks."""
+    return "\n".join(_code_blocks(res))
 
 
 def _exec_ns(res: str) -> dict:
-    """Exec the generated code, return its namespace ({} on failure)."""
-    ns: dict = {}
-    try:
-        exec(_extract_code(res), ns)
-    except Exception:
-        return {}
-    return ns
+    """Exec every candidate block and MERGE the namespaces.
+
+    Merging (rather than picking one "best" block) matters: a worker often emits
+    a correct function in one fence and something bigger in another. Keeping only
+    the largest namespace can discard the very function the checker looks for --
+    _find_fn tests each callable against the predicate, so it is safe to hand it
+    all of them.
+    """
+    merged: dict = {}
+    for code in _code_blocks(res):
+        ns: dict = {}
+        try:
+            exec(code, ns)
+        except Exception:
+            continue
+        merged.update({k: v for k, v in ns.items() if k != "__builtins__"})
+    return merged
 
 
 def _find_fn(ns: dict, predicate):

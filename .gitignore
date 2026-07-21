@@ -1,3 +1,6 @@
 .env
 __pycache__/
 *.pyc
+.obsidian/
+.model-orchestra-budget.json
+.model-orchestra-budget.json.tmp

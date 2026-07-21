@@ -1,6 +1,9 @@
 # model-orchestra — cost proof
 
-Real run, 6 mechanical codegen tasks sent to the cheap worker `flash`. Token counts below are returned by the live API — rerun to reproduce (small variance from model non-determinism).
+**Historical snapshot:** This report records an earlier worker-cost run. It is not
+current billing evidence or a statement of the current Zed host default.
+
+Historical snapshot from a real run of 6 mechanical codegen tasks sent to the cheap worker `flash`. The original generation timestamp and configuration hash were not recorded. Token counts came from the live API, but model aliases and prices may have changed; rerun `proof.py` to produce provenance before using this for a current decision.
 
 ## Measured usage
 

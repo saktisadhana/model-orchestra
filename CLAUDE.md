@@ -1,76 +1,45 @@
-# Supervisor role — DELEGATE EVERYTHING
+# Model Orchestra Host Policy
 
-You (Opus) are a **thin supervisor**. Your token budget is EXPENSIVE ($75/M output).
-Workers cost $0.28/M. Groq/SambaNova are FREE.
+Claude Code is a supported host for this repository. The runtime selects the
+host model; model-orchestra only supplies delegation tools.
 
-## Your only jobs
-1. Read request (< 50 tokens thinking)
-2. Decompose into subtasks
-3. Delegate EACH via model-orchestra tools
-4. Glance at output (< 20 tokens)
-5. Assemble and return
+## Routing
 
-**You do NOT write code, summarize, classify, or do routine work.**
+1. Handle trivial questions and small local edits directly when delegation would
+   add more prompt and result tokens than it saves.
+2. Use one cheap worker for bounded mechanical work, then verify the result.
+3. Use `batch_delegate` only for two or more substantial independent tasks.
+4. Reserve draft/refine, specialist pipelines, and swarms for complexity,
+   uncertainty, or high blast radius. Never swarm routine work.
+5. Keep architecture, security judgment, conflict resolution, and final
+   acceptance in the host. Never return unchecked worker output.
+6. Load only the smallest relevant skill or plugin workflow.
 
-## Tool selection
+## Context And Failure Policy
 
-| Situation | Tool |
-|---|---|
-| Any coding task | `pipeline(task, "draft-refine")` |
-| Bug fixing | `pipeline(task, "debug")` |
-| Hard/ambiguous code | `pipeline(task, "swarm-budget")` |
-| Write tests | `pipeline(task, "test-factory")` |
-| Analysis/architecture | `pipeline(task, "reasoning")` |
-| Code review | `pipeline(task, "code-review")` |
-| Critical production code | `pipeline(task, "heavy-swarm")` |
-| Quick question / one-liner | `pipeline(task, "speed-run")` |
-| Multi-step file edits | `delegate(task, "k27", agent=True)` |
-| Multiple independent tasks | `batch_delegate(json)` |
-| Don't know what to pick | `auto_delegate(task)` |
-| Check budget | `cost_report()` |
+- Search first and pass workers only relevant excerpts, constraints, and
+  acceptance criteria. Do not forward full conversations or repo overviews.
+- Prefer deterministic checks over additional model review.
+- Compact at phase boundaries, not repeatedly during an edit.
+- Never add raw HTML or full HTTP errors to context.
+- Treat context overflow as permanent for that payload. Stop after the first
+  failure; do not rotate keys/models or retry compaction blindly.
+- After one repeated tool failure, record it once, reduce scope, and continue
+  with a local fallback.
 
-## CRITICAL: batch_delegate saves you tokens
-When you have 2+ independent subtasks, use ONE `batch_delegate` call instead of
-multiple `delegate`/`pipeline` calls. Each tool call you make costs YOU context tokens.
+## Response Policy
 
-Example: `batch_delegate('[{"task":"write parser","mode":"draft-refine"},{"task":"write tests","mode":"test-factory"}]')`
+For routine completed work, report only what changed, validation performed, and
+a blocker or material residual risk. Keep routine responses under 120 words.
+Do not restate the request, host identity, repository architecture, unchanged
+capabilities, or command output unless asked.
 
-## What to delegate vs keep (READ THIS)
+## Safety
 
-Delegate **mechanical/bulk** work — it's lossless and cheap:
-- codegen, boilerplate, format conversion, parsers, test scaffolding, refactors.
-
-Keep the **reasoning/judgment** — workers are weaker and this is where quality drops:
-- decomposition, final synthesis/assembly, and **security/CTF/forensics/exploit/
-  crypto/vuln analysis**. Prefer to do these yourself. A subtly-wrong exploit or a
-  missed vuln costs far more than the tokens saved.
-
-### CybSec floor (enforced in code too)
-- `auto_delegate`/`pipeline` auto-detect security tasks and route them to the
-  `security` recipe (k27 → glm) — **never** flash/mimo/8B/free. You don't have to
-  remember; the guard does it.
-- To delegate a **mechanical subpart** of a security task to a cheap worker on
-  purpose (e.g. "write a pcap parser"), use `delegate(task, "flash")` with an
-  explicit model — that path is the deliberate escape hatch and is not floored.
-
-## Strict rules
-
-1. Delegate mechanical code. Keep reasoning/security analysis on yourself or a strong model.
-2. NEVER do bulk/mechanical work "because it's faster." Workers are FREE. You cost $75/M.
-3. Default: `auto_delegate()` for mechanical tasks; it floors security automatically.
-4. For coding: prefer `pipeline()` over raw `delegate()` (except the security escape hatch above).
-5. Your responses: SHORT. Confirmations and assembly only.
-6. If a worker fails, re-delegate. Don't rewrite.
-7. If re-delegation fails 2x, try different model (k26 → glm → grok). Workers auto-failover per-tier, so this is rarely needed.
-8. `k27`/`k3` are flaky upstream (Console Go 400s) — prefer `k26`/`glm`/`grok`. `k3` = last resort ($15/M, $15 cap).
-
-## Cost table
-
-| Model | Cost | Use |
-|---|---|---|
-| flash / mimo | $0.28/M | Freely |
-| Groq / SambaNova | FREE | Even more freely |
-| k27 / k26 | $4.00/M | Reviews |
-| glm | $4.40/M | Analysis |
-| k3 / grok | $6-15/M | Last resort |
-| **You (Opus)** | **$75/M** | **DELEGATE** |
+- Never put secrets in prompts, tool arguments, logs, transcripts, or files.
+- Keep security analysis on the host or the strong-model `security` pipeline.
+- External writes, publication, pushes, paid actions, and credential changes
+  require explicit approval.
+- `cost_report()` reports worker token usage plus a host-equivalent estimate at
+  published list rates. Neither is billed cost; the equivalence assumes the host
+  would have produced comparable token counts. Do not quote it as an invoice.
