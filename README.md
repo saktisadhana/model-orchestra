@@ -99,7 +99,35 @@ Three latency bugs fixed, each measured:
 | `compact()` summarized chunks serially | 3.0s / 10 chunks | **0.90s (3.3x)** |
 | Retry+failover had no wall-clock bound | ~27 min worst case | **bounded, verified 13.6s** |
 
-### 4. Cost: prompt caching is on
+### 4. Verification: supply your own tests, never let the worker write them
+
+`delegate_verified` runs generated code against tests and retries with the real
+failure output. **Which tests you use decides whether it helps or hurts.**
+
+| Mode | Actually correct (hidden checks) | Output tokens | Wall time |
+|---|---|---|---|
+| Plain `speed-run`, 24 tasks | **23/24 (96%)** | 15,499 | 43s |
+| Worker writes its own tests | **18/24 (75%)** | 84,572 (5.5x) | 158s |
+| Caller supplies tests | verified in 1 attempt | -- | 9.3s |
+
+Self-written tests are **worse than not verifying at all**: forcing implementation
+and tests into one response splits the token budget, and the retry loop then
+"fixes" working code against the model's own bad tests. It also once reported
+`VERIFIED` for code that failed independent checks -- confidently wrong, the worst
+failure mode there is.
+
+Pass real tests in the `tests` argument. They are the one specification a worker
+cannot game.
+
+### 5. Batching: return a manifest, not the code
+
+Everything a batch returns lands in the **host's** context at host rates -- echoing
+50 artifacts back cancels the saving that delegating them earned. `out_dir` writes
+artifacts to disk and returns a summary instead. Measured on a 3-task batch:
+1,932 chars inline vs 272 as a manifest, **86% less host context**, and the
+manifest stays roughly flat as the batch grows.
+
+### 6. Cost: prompt caching is on
 
 Gateway system prompts ship as cacheable blocks, billed at the ~10x cheaper
 `cached_input` rate. Measured **92% of prompt volume served from cache**. Cache
