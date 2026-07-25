@@ -4,11 +4,16 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
 CONFIG_ENV = "MODEL_ORCHESTRA_CONFIG"
+# Mirrors model_orchestra/data/config.schema.json; keep the two in step.
+ENV_NAME_PATTERN = re.compile(r"[A-Z][A-Z0-9_]*")
+SUPPORTED_CLIENTS = frozenset({"openai", "anthropic"})
+SUPPORTED_OBJECTIVES = frozenset({"strict_savings", "preserve_strong_model"})
 DEFAULT_CONFIG_PATH = Path.home() / ".config" / "model-orchestra" / "config.json"
 
 
@@ -63,6 +68,17 @@ def validate_config(config: dict[str, Any]) -> None:
         env_name = provider.get("api_key_env")
         if not isinstance(env_name, str) or not env_name:
             raise ValueError(f"provider {name!r} requires api_key_env")
+        if not ENV_NAME_PATTERN.fullmatch(env_name):
+            raise ValueError(
+                f"provider {name!r} api_key_env {env_name!r} must be an uppercase "
+                "environment variable name"
+            )
+        client = provider.get("client")
+        if client is not None and client not in SUPPORTED_CLIENTS:
+            raise ValueError(
+                f"provider {name!r} client {client!r} must be one of: "
+                + ", ".join(sorted(SUPPORTED_CLIENTS))
+            )
 
     workers = config["workers"]
     for alias in ("flash", "terra", "sol", "k3"):
@@ -85,6 +101,10 @@ def validate_config(config: dict[str, Any]) -> None:
             "pipelines requires compatibility routes: " + ", ".join(missing_routes)
         )
     for route, pipeline in config["pipelines"].items():
+        # Underscore-prefixed keys are the inline-comment convention used
+        # throughout these configs; they are notes, not routes.
+        if route.startswith("_"):
+            continue
         if not isinstance(pipeline, dict):
             raise ValueError(f"pipeline {route!r} must be an object")
         references = [
@@ -102,8 +122,32 @@ def validate_config(config: dict[str, Any]) -> None:
                 f"pipeline {route!r} references unknown workers: " + ", ".join(unknown)
             )
 
+    cost_control = config["cost_control"]
+    for field in ("host_model", "implementation_model"):
+        alias = cost_control.get(field)
+        if not isinstance(alias, str) or not alias:
+            raise ValueError(f"cost_control.{field} must be a non-empty string")
+        if alias not in workers:
+            raise ValueError(
+                f"cost_control.{field} references unknown worker {alias!r}"
+            )
+    objective = cost_control.get("objective")
+    if objective not in SUPPORTED_OBJECTIVES:
+        raise ValueError(
+            "cost_control.objective must be one of: "
+            + ", ".join(sorted(SUPPORTED_OBJECTIVES))
+        )
+
     budget = config["budget"]
-    for field in ("provider_groups", "provider_limits", "pricing_per_million_tokens"):
+    currency = budget.get("currency")
+    if not isinstance(currency, str) or not currency:
+        raise ValueError("budget.currency must be a non-empty string")
+    for field in (
+        "provider_groups",
+        "provider_limits",
+        "billing_modes",
+        "pricing_per_million_tokens",
+    ):
         if not isinstance(budget.get(field), dict):
             raise ValueError(f"budget.{field} must be an object")
 

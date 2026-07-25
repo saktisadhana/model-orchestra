@@ -1652,6 +1652,39 @@ def test_release_readiness_classifies_local_runtime_debris() -> None:
         assert release_readiness.classify_path(path) == "local_runtime_debris"
 
 
+def test_validate_config_enforces_every_schema_required_field() -> None:
+    """Each field the JSON schema marks required must fail validation when broken."""
+    import copy
+
+    base = public_config.load_config(public_config.example_config_path())
+    public_config.validate_config(base)
+
+    mutations = {
+        "budget.currency": lambda c: c["budget"].pop("currency"),
+        "budget.billing_modes": lambda c: c["budget"].pop("billing_modes"),
+        "cost_control.objective": lambda c: c["cost_control"].update(objective="cheapest"),
+        "cost_control.host_model": lambda c: c["cost_control"].update(host_model="absent"),
+        "provider.client": lambda c: c["providers"]["anthropic-compatible"].update(client="Anthropic"),
+        "provider.api_key_env": lambda c: c["providers"]["openai-compatible"].update(api_key_env="lower_case"),
+        "pipeline.route": lambda c: c["pipelines"].update(broken="not-an-object"),
+    }
+    for label, mutate in mutations.items():
+        candidate = copy.deepcopy(base)
+        mutate(candidate)
+        try:
+            public_config.validate_config(candidate)
+        except ValueError:
+            continue
+        raise AssertionError(f"validate_config accepted an invalid config: {label}")
+
+
+def test_validate_config_allows_underscore_comment_keys_in_pipelines() -> None:
+    """Underscore keys are the inline-comment convention, not routes to validate."""
+    config = public_config.load_config(public_config.example_config_path())
+    config["pipelines"]["_routing_note"] = "prefer the cheapest eligible worker"
+    public_config.validate_config(config)
+
+
 def test_public_config_assets_are_neutral_and_valid() -> None:
     example = public_config.example_config_path()
     schema = public_config.schema_path()
