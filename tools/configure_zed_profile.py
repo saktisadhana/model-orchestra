@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parent.parent
 
 PROFILE_ID = "model-orchestra"
 AUTO_ROUTER_ID = "model-orchestra-auto"
+HERMES_AGENT_ID = "hermes"
 GATEWAY_API_URL = "https://68886868.xyz/v1"
 GATEWAY_MODELS = [
     {
@@ -81,7 +82,10 @@ PROFILE = {
                 "delegate": True,
                 "delegate_verified": True,
                 "list_workers": True,
+                "orchestrate_change": True,
+                "orchestration_report": True,
                 "pipeline": True,
+                "route_preview": True,
                 "swarm": True,
             }
         }
@@ -116,7 +120,32 @@ def auto_router_config() -> dict[str, object]:
     }
 
 
-def install(settings_path: Path, backup: bool = True, install_auto_router: bool = False) -> bool:
+def hermes_agent_config() -> dict[str, object]:
+    """Return the secret-free Zed registration for the managed Hermes install."""
+    launcher = (
+        Path.home()
+        / "AppData"
+        / "Local"
+        / "hermes"
+        / "hermes-agent"
+        / "venv"
+        / "Scripts"
+        / "hermes-acp.exe"
+    )
+    return {
+        "type": "custom",
+        "command": str(launcher),
+        "args": [],
+        "env": {},
+    }
+
+
+def install(
+    settings_path: Path,
+    backup: bool = True,
+    install_auto_router: bool = False,
+    install_hermes: bool = False,
+) -> bool:
     original = settings_path.read_text(encoding="utf-8") if settings_path.exists() else "{}\n"
     header, body = split_comment_header(original)
     settings = json.loads(body)
@@ -139,14 +168,22 @@ def install(settings_path: Path, backup: bool = True, install_auto_router: bool 
 
     changed = profiles.get(PROFILE_ID) != PROFILE
     profiles[PROFILE_ID] = PROFILE
-    if install_auto_router:
-        agent_servers = settings.setdefault("agent_servers", {})
-        if not isinstance(agent_servers, dict):
+    agent_servers: dict[str, object] | None = None
+    if install_auto_router or install_hermes:
+        configured_servers = settings.setdefault("agent_servers", {})
+        if not isinstance(configured_servers, dict):
             raise ValueError("agent_servers setting must be an object")
+        agent_servers = configured_servers
+    if install_auto_router and agent_servers is not None:
         router = auto_router_config()
         if agent_servers.get(AUTO_ROUTER_ID) != router:
             changed = True
             agent_servers[AUTO_ROUTER_ID] = router
+    if install_hermes and agent_servers is not None:
+        hermes = hermes_agent_config()
+        if agent_servers.get(HERMES_AGENT_ID) != hermes:
+            changed = True
+            agent_servers[HERMES_AGENT_ID] = hermes
     for provider, config in GATEWAY_PROVIDERS.items():
         if providers.get(provider) != config:
             changed = True
@@ -176,6 +213,11 @@ def main() -> int:
         action="store_true",
         help="also register the Model Orchestra Auto ACP external agent",
     )
+    parser.add_argument(
+        "--install-hermes",
+        action="store_true",
+        help="also register the installed Hermes ACP external agent",
+    )
     args = parser.parse_args()
 
     try:
@@ -183,6 +225,7 @@ def main() -> int:
             args.settings,
             backup=not args.no_backup,
             install_auto_router=args.install_auto_router,
+            install_hermes=args.install_hermes,
         )
     except (OSError, ValueError, json.JSONDecodeError) as error:
         print(f"Zed profile installation failed: {error}")
@@ -192,6 +235,8 @@ def main() -> int:
     print(f"Model Orchestra profile {state}: {args.settings}")
     if args.install_auto_router:
         print("Model Orchestra Auto external agent: installed")
+    if args.install_hermes:
+        print("Hermes external agent: installed")
     return 0
 
 

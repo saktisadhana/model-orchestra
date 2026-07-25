@@ -1,0 +1,240 @@
+{
+  "schema_version": 1,
+  "tools": [
+    {
+      "description": "Run independent tasks concurrently and return a disk manifest by default.\n\n    Input is a JSON list of {task, model?, mode?, agent?, tests?, attempts?}.\n    Artifacts are written beneath `workspace`; set `inline=True` only when the host\n    genuinely needs every result in context. `out_dir` selects a workspace-contained\n    artifact directory. Existing explicit artifacts are never overwritten unless\n    `overwrite=True`.\n    ",
+      "inputSchema": {
+        "properties": {
+          "inline": {
+            "default": false,
+            "title": "Inline",
+            "type": "boolean"
+          },
+          "out_dir": {
+            "default": "",
+            "title": "Out Dir",
+            "type": "string"
+          },
+          "overwrite": {
+            "default": false,
+            "title": "Overwrite",
+            "type": "boolean"
+          },
+          "tasks_json": {
+            "title": "Tasks Json",
+            "type": "string"
+          },
+          "workspace": {
+            "default": ".",
+            "title": "Workspace",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tasks_json"
+        ],
+        "title": "batch_delegateArguments",
+        "type": "object"
+      },
+      "name": "batch_delegate"
+    },
+    {
+      "description": "Session token usage and configured end-to-end cost estimates.\n\n    `detail` is currently unused; it exists so the tool never has an empty\n    argument object. See the note on list_workers (zed-industries/zed#48955).\n    ",
+      "inputSchema": {
+        "properties": {
+          "detail": {
+            "default": false,
+            "title": "Detail",
+            "type": "boolean"
+          }
+        },
+        "title": "cost_reportArguments",
+        "type": "object"
+      },
+      "name": "cost_report"
+    },
+    {
+      "description": "Send a task to a worker with an auditable capability guard.\n\n    Security work requires Sol. Workspace repository implementation with\n    ``agent=True`` requires K3. Mechanical stateless calls remain compatible;\n    an explicit override is available for deliberate, audited subparts only.\n    ",
+      "inputSchema": {
+        "properties": {
+          "agent": {
+            "default": false,
+            "title": "Agent",
+            "type": "boolean"
+          },
+          "allow_capability_override": {
+            "default": false,
+            "title": "Allow Capability Override",
+            "type": "boolean"
+          },
+          "allow_economic_override": {
+            "default": false,
+            "title": "Allow Economic Override",
+            "type": "boolean"
+          },
+          "model": {
+            "default": "flash",
+            "title": "Model",
+            "type": "string"
+          },
+          "system": {
+            "default": "",
+            "title": "System",
+            "type": "string"
+          },
+          "task": {
+            "title": "Task",
+            "type": "string"
+          },
+          "workspace": {
+            "default": ".",
+            "title": "Workspace",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task"
+        ],
+        "title": "delegateArguments",
+        "type": "object"
+      },
+      "name": "delegate"
+    },
+    {
+      "description": "Generate Python code and verify it against caller-supplied tests.\n\n    `tests` must define plain-assert functions named `test_*`. Verification runs\n    generated code locally in a temporary directory with a timeout, but not an OS\n    sandbox. Never use this tool for untrusted code or test input.\n    ",
+      "inputSchema": {
+        "properties": {
+          "attempts": {
+            "default": 0,
+            "title": "Attempts",
+            "type": "integer"
+          },
+          "escalate": {
+            "default": false,
+            "title": "Escalate",
+            "type": "boolean"
+          },
+          "model": {
+            "default": "flash",
+            "title": "Model",
+            "type": "string"
+          },
+          "task": {
+            "title": "Task",
+            "type": "string"
+          },
+          "tests": {
+            "default": "",
+            "title": "Tests",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task"
+        ],
+        "title": "delegate_verifiedArguments",
+        "type": "object"
+      },
+      "name": "delegate_verified"
+    },
+    {
+      "description": "List workers and pipelines. detail=True also shows each alias target.",
+      "inputSchema": {
+        "properties": {
+          "detail": {
+            "default": false,
+            "title": "Detail",
+            "type": "boolean"
+          }
+        },
+        "title": "list_workersArguments",
+        "type": "object"
+      },
+      "name": "list_workers"
+    },
+    {
+      "description": "Run one substantial repository change through the K3 workspace agent.\n\n    The response is a bounded metadata handoff. It contains hashes and sizes for\n    changed files, never their contents. K3 is invoked at most once and is never\n    silently replaced by a cheaper worker; the host owns diff review and tests.\n    ",
+      "inputSchema": {
+        "properties": {
+          "max_cost_idr": {
+            "default": 0.0,
+            "title": "Max Cost Idr",
+            "type": "number"
+          },
+          "system": {
+            "default": "",
+            "title": "System",
+            "type": "string"
+          },
+          "task": {
+            "title": "Task",
+            "type": "string"
+          },
+          "workspace": {
+            "default": ".",
+            "title": "Workspace",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task"
+        ],
+        "title": "orchestrate_changeArguments",
+        "type": "object"
+      },
+      "name": "orchestrate_change"
+    },
+    {
+      "description": "Return aggregate routing and agent telemetry without prompts or file contents.",
+      "inputSchema": {
+        "properties": {
+          "detail": {
+            "default": false,
+            "title": "Detail",
+            "type": "boolean"
+          }
+        },
+        "title": "orchestration_reportArguments",
+        "type": "object"
+      },
+      "name": "orchestration_report"
+    },
+    {
+      "description": "Explain the capability-safe route and its configured cost estimate.\n\n    This performs no model calls. Use it before an expensive or ambiguous\n    delegation; auto_delegate uses the same planner and therefore cannot silently\n    choose a cheaper route outside the task's capability class.\n    ",
+      "inputSchema": {
+        "properties": {
+          "agent": {
+            "default": false,
+            "title": "Agent",
+            "type": "boolean"
+          },
+          "max_cost_idr": {
+            "default": 0.0,
+            "title": "Max Cost Idr",
+            "type": "number"
+          },
+          "system": {
+            "default": "",
+            "title": "System",
+            "type": "string"
+          },
+          "task": {
+            "title": "Task",
+            "type": "string"
+          },
+          "tests": {
+            "default": "",
+            "title": "Tests",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task"
+        ],
+        "title": "route_previewArguments",
+        "type": "object"
+      },
+      "name": "route_preview"
+    }
+  ]
+}
