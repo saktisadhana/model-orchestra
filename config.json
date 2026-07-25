@@ -1,18 +1,45 @@
 {
   "providers": {
-    "openrouter": {"base_url": "https://openrouter.ai/api/v1", "api_key_env": "OPENROUTER_API_KEY"},
-    "nvidia": {"base_url": "https://integrate.api.nvidia.com/v1", "api_key_env": "NVIDIA_API_KEY"},
-    "opencode-go": {"base_url": "https://opencode.ai/zen/go/v1", "api_key_env": "OPENCODE_API_KEY"},
-    "groq": {"base_url": "https://api.groq.com/openai/v1", "api_key_env": "GROQ_API_KEY"},
-    "sambanova": {"base_url": "https://api.sambanova.ai/v1", "api_key_env": "SAMBANOVA_API_KEY"},
+    "openrouter": {
+      "base_url": "https://openrouter.ai/api/v1",
+      "api_key_env": "OPENROUTER_API_KEY"
+    },
+    "nvidia": {
+      "base_url": "https://integrate.api.nvidia.com/v1",
+      "api_key_env": "NVIDIA_API_KEY"
+    },
+    "opencode-go": {
+      "base_url": "https://opencode.ai/zen/go/v1",
+      "api_key_env": "OPENCODE_API_KEY"
+    },
+    "groq": {
+      "base_url": "https://api.groq.com/openai/v1",
+      "api_key_env": "GROQ_API_KEY"
+    },
+    "sambanova": {
+      "base_url": "https://api.sambanova.ai/v1",
+      "api_key_env": "SAMBANOVA_API_KEY"
+    },
     "68886868": {
       "base_url": "https://api.68886868.xyz",
       "api_key_env": "API_68886868_KEY",
-      "api_key_envs": ["C_LITE_1_API_KEY", "C_LITE_2_API_KEY", "C_PRO_API_KEY"],
+      "api_key_envs": [
+        "C_LITE_1_API_KEY",
+        "C_LITE_2_API_KEY",
+        "C_PRO_API_KEY"
+      ],
       "client": "anthropic"
     },
-    "kimi-gw": {"base_url": "https://api.68886868.xyz", "api_key_env": "KIMI_GW_KEY", "client": "anthropic"},
-    "grok-gw": {"base_url": "https://api.68886868.xyz", "api_key_env": "GROK_GW_KEY", "client": "anthropic"}
+    "kimi-gw": {
+      "base_url": "https://api.68886868.xyz",
+      "api_key_env": "KIMI_GW_KEY",
+      "client": "anthropic"
+    },
+    "grok-gw": {
+      "base_url": "https://api.68886868.xyz",
+      "api_key_env": "GROK_GW_KEY",
+      "client": "anthropic"
+    }
   },
   "workers": {
     "mimo": "opencode-go/mimo-v2.5",
@@ -36,20 +63,83 @@
     "fast-samba": "sambanova/Meta-Llama-3.3-70B-Instruct"
   },
   "pipelines": {
-    "_routing_note": "Model choice is the dominant latency lever. Measured throughput on an identical 1500-token generation: fast-groq 236 tok/s, fast-nv 118, fast-samba 87, flash 77, glm 76, k27 63, ds-pro 53, mimo 34, k26 30, terra 4.4. draft-refine previously used mimo/mimo (34 tok/s, the second-slowest worker) and the swarm judge was k26 (30 tok/s, the slowest) sitting on the critical path. Swapping to flash/glm keeps the same cost tier and strength while roughly halving wall time. Do not route hot paths through terra.",
-    "draft-refine": {"description": "General coding. Flash drafts, GLM refines -- both ~2x faster than MiMo at the same tier.", "drafter": "flash", "refiner": "glm"},
-    "debug": {"description": "Bug fixing. Flash drafts and verifies; reserve premium review for explicit requests.", "drafter": "flash", "refiner": "flash"},
-    "swarm-budget": {"description": "Hard problems. Three workers run in parallel; GLM judges (2.5x faster than K2.6, same strong tier).", "workers": ["flash", "mimo", "ds-pro"], "judge": "glm"},
-    "test-factory": {"description": "Test generation. Flash skeleton, Flash edge cases, GLM review.", "stages": ["flash", "flash", "glm"]},
-    "reasoning": {"description": "Analysis and architecture. Flash gathers context, Kimi K2.7 provides bounded review.", "drafter": "flash", "refiner": "k27"},
-    "code-review": {"description": "PR review. MiMo + Flash parallel reviewers, Kimi K2.7 synthesizes.", "workers": ["mimo", "flash"], "judge": "k27"},
-    "heavy-swarm": {"description": "Critical code. Five workers from multiple families; Kimi K2.7 judges.", "workers": ["flash", "mimo", "ds-pro", "k26", "glm51"], "judge": "k27"},
-    "speed-run": {"description": "Quick one-shot. Flash only.", "single": "flash"},
-    "security": {"description": "CybSec, exploit, cryptography, malware, and forensics reasoning. GPT-5.6 Sol only.", "single": "sol"},
-    "hybrid": {"description": "General high-capability work. GPT-5.6 Terra drafts and K2.6 refines.", "drafter": "terra", "refiner": "k26"},
+    "_routing_note": "Capability eligibility is decided before economics. Substantial repository implementation uses the K3 workspace agent; architecture and final acceptance stay with the host; security stays on Sol. Measured mechanical throughput still controls stateless routes: auto_delegate uses one-shot Flash or SKIP_DELEGATION when those routes miss the saving floor.",
+    "draft-refine": {
+      "description": "General coding capability recipe. Flash drafts and GLM refines; auto routing uses it only when cost-effective.",
+      "drafter": "flash",
+      "refiner": "glm"
+    },
+    "debug": {
+      "description": "Bug fixing. Flash drafts and verifies; reserve premium review for explicit requests.",
+      "drafter": "flash",
+      "refiner": "flash"
+    },
+    "swarm-budget": {
+      "description": "Hard problems. Three workers run in parallel; GLM judges (2.5x faster than K2.6, same strong tier).",
+      "workers": [
+        "flash",
+        "mimo",
+        "ds-pro"
+      ],
+      "judge": "glm"
+    },
+    "test-factory": {
+      "description": "Test generation. Flash skeleton, Flash edge cases, GLM review.",
+      "stages": [
+        "flash",
+        "flash",
+        "glm"
+      ]
+    },
+    "reasoning": {
+      "description": "Analysis and architecture. Flash gathers context, Kimi K2.7 provides bounded review.",
+      "drafter": "flash",
+      "refiner": "k27"
+    },
+    "code-review": {
+      "description": "PR review. MiMo + Flash parallel reviewers, Kimi K2.7 synthesizes.",
+      "workers": [
+        "mimo",
+        "flash"
+      ],
+      "judge": "k27"
+    },
+    "heavy-swarm": {
+      "description": "Critical code. Five workers from multiple families; Kimi K2.7 judges.",
+      "workers": [
+        "flash",
+        "mimo",
+        "ds-pro",
+        "k26",
+        "glm51"
+      ],
+      "judge": "k27"
+    },
+    "speed-run": {
+      "description": "Quick one-shot. Flash only.",
+      "single": "flash"
+    },
+    "repository-edit": {
+      "description": "Substantial workspace implementation. Kimi K3 edits with scoped agent tools; the host plans, reviews, and accepts.",
+      "single": "k3"
+    },
+    "security": {
+      "description": "CybSec, exploit, cryptography, malware, and forensics reasoning. GPT-5.6 Sol only.",
+      "single": "sol"
+    },
+    "hybrid": {
+      "description": "General high-capability work. GPT-5.6 Terra drafts and K2.6 refines.",
+      "drafter": "terra",
+      "refiner": "k26"
+    },
     "deep-plan": {
       "description": "Deep planning. OpenCode analysis and review with Grok verification.",
-      "stages": ["flash", "glm", "k26", "grok"],
+      "stages": [
+        "flash",
+        "glm",
+        "k26",
+        "grok"
+      ],
       "stage_prompts": [
         "Analyze the task below. Extract requirements, constraints, edge cases, and success criteria. No implementation yet. Output concise bullet points.",
         "Using the analysis, produce a concrete numbered implementation plan with files, functions, data flow, and sequencing.",
@@ -59,7 +149,12 @@
     },
     "sec-deep": {
       "description": "Authorized defensive security review. Sol is used once for core analysis.",
-      "stages": ["k26", "glm", "sol", "grok"],
+      "stages": [
+        "k26",
+        "glm",
+        "sol",
+        "grok"
+      ],
       "stage_prompts": [
         "Establish scope, assets, trust boundaries, out-of-bounds rules, and assumptions.",
         "Enumerate and prioritize the attack surface and likely vulnerability classes.",
@@ -69,28 +164,119 @@
     }
   },
   "tiers": {
-    "strong": ["sol", "terra", "luna", "k26", "glm", "grok", "grok-oc", "glm51", "k27", "k27-oc", "k3", "orchestrator-fallback"],
-    "cheap": ["flash", "mimo", "ds-pro", "mimo-pro"]
+    "strong": [
+      "sol",
+      "terra",
+      "luna",
+      "k26",
+      "glm",
+      "grok",
+      "grok-oc",
+      "glm51",
+      "k27",
+      "k27-oc",
+      "k3",
+      "orchestrator-fallback"
+    ],
+    "cheap": [
+      "flash",
+      "mimo",
+      "ds-pro",
+      "mimo-pro"
+    ]
   },
-  "fallback_chain": ["fast-groq", "fast-samba", "fast-nv"],
+  "fallback_chain": [
+    "fast-groq",
+    "fast-samba",
+    "fast-nv"
+  ],
   "_model_fallbacks_note": "Family-aware, cross-provider first. A model's failover stays in its own family (kimi->kimi, glm->glm, gpt-5.6->gpt-5.6) but hops to a DIFFERENT provider first, because the usual cause of failure is the provider being down, not the model. 'sol' keeps an empty list on purpose: it is the security capability floor and must never silently downgrade.",
   "model_fallbacks": {
-    "k26": ["k27", "k3", "k27-oc", "glm"],
-    "k27": ["k27-oc", "k26", "k3", "glm"],
-    "k27-oc": ["k27", "k26", "k3", "glm"],
-    "k3": ["k27", "k27-oc", "k26", "glm"],
-    "glm": ["glm51", "k27", "k26"],
-    "glm51": ["glm", "k27", "k26"],
-    "grok": ["grok-oc", "glm", "k26"],
-    "grok-oc": ["grok", "glm", "k26"],
-    "terra": ["luna", "sol", "k26", "glm"],
-    "luna": ["terra", "sol", "k26", "glm"],
-    "orchestrator-fallback": ["luna", "sol", "k26", "glm"],
+    "k26": [
+      "k27",
+      "k3",
+      "k27-oc",
+      "glm"
+    ],
+    "k27": [
+      "k27-oc",
+      "k26",
+      "k3",
+      "glm"
+    ],
+    "k27-oc": [
+      "k27",
+      "k26",
+      "k3",
+      "glm"
+    ],
+    "k3": [
+      "k27",
+      "k27-oc",
+      "k26",
+      "glm"
+    ],
+    "glm": [
+      "glm51",
+      "k27",
+      "k26"
+    ],
+    "glm51": [
+      "glm",
+      "k27",
+      "k26"
+    ],
+    "grok": [
+      "grok-oc",
+      "glm",
+      "k26"
+    ],
+    "grok-oc": [
+      "grok",
+      "glm",
+      "k26"
+    ],
+    "terra": [
+      "luna",
+      "sol",
+      "k26",
+      "glm"
+    ],
+    "luna": [
+      "terra",
+      "sol",
+      "k26",
+      "glm"
+    ],
+    "orchestrator-fallback": [
+      "luna",
+      "sol",
+      "k26",
+      "glm"
+    ],
     "sol": [],
-    "flash": ["mimo", "ds-pro", "fast-groq", "fast-samba"],
-    "mimo": ["flash", "ds-pro", "fast-groq", "fast-samba"],
-    "ds-pro": ["mimo", "flash", "fast-groq"],
-    "mimo-pro": ["ds-pro", "mimo", "flash"]
+    "flash": [
+      "mimo",
+      "ds-pro",
+      "fast-groq",
+      "fast-samba"
+    ],
+    "mimo": [
+      "flash",
+      "ds-pro",
+      "fast-groq",
+      "fast-samba"
+    ],
+    "ds-pro": [
+      "mimo",
+      "flash",
+      "fast-groq"
+    ],
+    "mimo-pro": [
+      "ds-pro",
+      "mimo",
+      "flash"
+    ]
   },
   "agent_max_steps": 6,
   "worker_max_tokens": 3072,
@@ -116,22 +302,56 @@
   "batch_max_parallel": 8,
   "batch_item_response_chars": 3000,
   "batch_total_response_chars": 60000,
+  "default_batch_artifact_dir": ".model-orchestra-artifacts",
   "enforce_security_floor": true,
+  "cost_control": {
+    "host_model": "terra",
+    "implementation_model": "k3",
+    "objective": "preserve_strong_model",
+    "capability_first_routes": [
+      "repository-edit"
+    ],
+    "minimum_saving_percent": 10.0,
+    "estimated_output_tokens": 1536,
+    "estimated_output_tokens_by_route": {
+      "speed-run": 1536,
+      "repository-edit": 768,
+      "security": 1536
+    },
+    "estimated_agent_steps": 2,
+    "fallback_reserve_percent": 5.0,
+    "verification_retry_reserve_percent": 20.0,
+    "verification_escalation_model": "k27",
+    "chars_per_token": 4.0,
+    "_note": "Routing estimates are conservative decision aids, not invoices. The default output estimate follows the measured six-task mean (~1537 tokens). A 5% fallback reserve keeps the proven 18.3% single-Flash path above the 10% saving floor without assuming failover is free. Repository implementation and security are capability-first routes; an explicit max_cost_idr cap can still block them."
+  },
   "budget": {
     "currency": "IDR",
-    "_host_comparison_note": "Published Anthropic list rates for the host model, used ONLY to estimate what the same delegated token volume would have cost if the host had generated it. This is an equivalence estimate, not an invoice, and not a claim that the host would emit an identical number of tokens.",
-    "host_comparison": {
-      "model": "claude-opus-4-8",
-      "currency": "USD",
-      "input_per_million": 5.00,
-      "output_per_million": 25.00
-    },
-
+    "_host_comparison_note": "cost_control.host_model selects the comparison alias; its rates come from pricing_per_million_tokens below. Estimates are not provider invoices.",
     "state_file": ".model-orchestra-budget.json",
+    "database_file": ".model-orchestra-budget.sqlite3",
+    "billing_modes": {
+      "opencode-go": {
+        "mode": "subscription",
+        "metered_overage_enabled": false
+      },
+      "chicken-farm": {
+        "mode": "metered",
+        "metered_overage_enabled": true
+      }
+    },
     "_provider_limits_note": "Self-consistent envelope: daily ~= monthly/30, five_hour = daily/2 so two full working windows fit in a day without breaking the monthly plan. The old five_hour values (2100/1750) were tighter than daily/2 and interrupted a single long session before the daily budget was anywhere near spent.",
     "provider_limits": {
-      "opencode-go": {"monthly": 185000, "daily": 6200, "five_hour": 3100},
-      "chicken-farm": {"monthly": 155000, "daily": 5200, "five_hour": 2600}
+      "opencode-go": {
+        "monthly": 185000,
+        "daily": 6200,
+        "five_hour": 3100
+      },
+      "chicken-farm": {
+        "monthly": 155000,
+        "daily": 5200,
+        "five_hour": 2600
+      }
     },
     "provider_groups": {
       "opencode-go": "opencode-go",
@@ -139,23 +359,83 @@
       "kimi-gw": "chicken-farm",
       "grok-gw": "chicken-farm"
     },
-    "_pricing_note": "luna, k27-oc, and grok-oc are UNVERIFIED estimates mirroring the closest known model on the same provider (luna~terra, k27-oc/grok-oc~k26). They exist so the budget guard tracks them at all; a missing entry prices a model at 0 and leaves it unbounded. Verify against the provider before trusting these numbers.",
+    "_pricing_note": "Rates verified 2026-07-22 against provider dashboards. Gateway (68886868 / kimi-gw / grok-gw) quoted in HKD converted at 2100 IDR/HKD, using the codex-plus-cc (C_LITE_1, 0.1x) tier because that key is tried first; if the rotation falls through to C_PRO (codex-pro, 0.2x) real cost doubles. OpenCode Go quoted in USD converted at 16380 IDR/USD, and is additionally capped at $12/5h, $30/week, $60/month. Previously luna was 5x and terra/sol 2x overstated.",
     "pricing_per_million_tokens": {
-      "sol": {"input": 2100, "output": 12600, "cached_input": 210},
-      "terra": {"input": 1050, "output": 6300, "cached_input": 105},
-      "luna": {"input": 1050, "output": 6300, "cached_input": 105},
-      "k27-oc": {"input": 14250, "output": 60000, "cached_input": 2400},
-      "grok-oc": {"input": 14250, "output": 60000, "cached_input": 2400},
-      "grok": {"input": 84, "output": 252, "cached_input": 21},
-      "k27": {"input": 311, "output": 1470, "cached_input": 63},
-      "k3": {"input": 1260, "output": 6300, "cached_input": 126},
-      "mimo": {"input": 2100, "output": 4200, "cached_input": 42},
-      "flash": {"input": 2100, "output": 4200, "cached_input": 42},
-      "ds-pro": {"input": 6525, "output": 13050, "cached_input": 55},
-      "mimo-pro": {"input": 6525, "output": 13050, "cached_input": 55},
-      "k26": {"input": 14250, "output": 60000, "cached_input": 2400},
-      "glm": {"input": 21000, "output": 66000, "cached_input": 3900},
-      "glm51": {"input": 21000, "output": 66000, "cached_input": 3900}
+      "sol": {
+        "input": 1050,
+        "output": 6300,
+        "cached_input": 105
+      },
+      "terra": {
+        "input": 525,
+        "output": 3150,
+        "cached_input": 53
+      },
+      "luna": {
+        "input": 210,
+        "output": 1260,
+        "cached_input": 21
+      },
+      "k27-oc": {
+        "input": 15561,
+        "output": 65520,
+        "cached_input": 3112
+      },
+      "grok-oc": {
+        "input": 32760,
+        "output": 98280,
+        "cached_input": 0
+      },
+      "grok": {
+        "input": 84,
+        "output": 252,
+        "cached_input": 21
+      },
+      "k27": {
+        "input": 311,
+        "output": 1470,
+        "cached_input": 63
+      },
+      "k3": {
+        "input": 1260,
+        "output": 6300,
+        "cached_input": 126
+      },
+      "mimo": {
+        "input": 2293,
+        "output": 4586,
+        "cached_input": 46
+      },
+      "flash": {
+        "input": 2293,
+        "output": 4586,
+        "cached_input": 46
+      },
+      "ds-pro": {
+        "input": 7125,
+        "output": 14251,
+        "cached_input": 59
+      },
+      "mimo-pro": {
+        "input": 7125,
+        "output": 14251,
+        "cached_input": 59
+      },
+      "k26": {
+        "input": 15561,
+        "output": 65520,
+        "cached_input": 2621
+      },
+      "glm": {
+        "input": 22932,
+        "output": 72072,
+        "cached_input": 4259
+      },
+      "glm51": {
+        "input": 22932,
+        "output": 72072,
+        "cached_input": 4259
+      }
     }
   }
 }

@@ -1,0 +1,125 @@
+{
+  "schema_version": 1,
+  "providers": {
+    "openai-compatible": {
+      "base_url": "https://api.example.com/v1",
+      "api_key_env": "MODEL_ORCHESTRA_OPENAI_API_KEY"
+    },
+    "anthropic-compatible": {
+      "base_url": "https://api.example.com",
+      "api_key_env": "MODEL_ORCHESTRA_ANTHROPIC_API_KEY",
+      "client": "anthropic"
+    }
+  },
+  "workers": {
+    "flash": "openai-compatible/cheap-coding-model",
+    "terra": "anthropic-compatible/strong-reasoning-model",
+    "sol": "anthropic-compatible/strong-reasoning-model",
+    "k3": "anthropic-compatible/strong-reasoning-model"
+  },
+  "pipelines": {
+    "speed-run": {
+      "description": "One bounded mechanical worker call.",
+      "single": "flash"
+    },
+    "draft-refine": {
+      "description": "Two-pass mechanical coding route.",
+      "drafter": "flash",
+      "refiner": "flash"
+    },
+    "debug": {
+      "description": "Diagnose then repair a bounded defect.",
+      "stages": ["flash", "flash"]
+    },
+    "test-factory": {
+      "description": "Generate tests, implementation, and a final review.",
+      "stages": ["flash", "flash", "terra"]
+    },
+    "security": {
+      "description": "Strong-model security route.",
+      "single": "sol"
+    },
+    "repository-edit": {
+      "description": "Workspace implementation route.",
+      "single": "k3"
+    }
+  },
+  "tiers": {
+    "cheap": ["flash"],
+    "strong": ["terra", "sol", "k3"]
+  },
+  "fallback_chain": [],
+  "model_fallbacks": {},
+  "enforce_security_floor": true,
+  "worker_max_tokens": 3072,
+  "agent_max_tokens": 3072,
+  "judge_max_tokens": 4096,
+  "cost_control": {
+    "host_model": "terra",
+    "implementation_model": "k3",
+    "objective": "strict_savings",
+    "minimum_saving_percent": 10.0,
+    "estimated_output_tokens": 1536,
+    "estimated_output_tokens_by_route": {
+      "speed-run": 1536,
+      "draft-refine": 1536,
+      "debug": 1536,
+      "test-factory": 1536,
+      "repository-edit": 768,
+      "security": 1536
+    }
+  },
+  "budget": {
+    "currency": "USD",
+    "state_file": ".model-orchestra-budget.json",
+    "database_file": ".model-orchestra-budget.sqlite3",
+    "provider_groups": {
+      "openai-compatible": "metered-workers",
+      "anthropic-compatible": "metered-strong"
+    },
+    "provider_limits": {
+      "metered-workers": {
+        "monthly": 20,
+        "daily": 2,
+        "five_hour": 1
+      },
+      "metered-strong": {
+        "monthly": 30,
+        "daily": 3,
+        "five_hour": 2
+      }
+    },
+    "billing_modes": {
+      "metered-workers": {
+        "mode": "metered",
+        "metered_overage_enabled": true
+      },
+      "metered-strong": {
+        "mode": "metered",
+        "metered_overage_enabled": true
+      }
+    },
+    "pricing_per_million_tokens": {
+      "flash": {
+        "input": 0.2,
+        "output": 1.0,
+        "cached_input": 0.05
+      },
+      "terra": {
+        "input": 3.0,
+        "output": 15.0,
+        "cached_input": 0.3
+      },
+      "sol": {
+        "input": 3.0,
+        "output": 15.0,
+        "cached_input": 0.3
+      },
+      "k3": {
+        "input": 3.0,
+        "output": 15.0,
+        "cached_input": 0.3
+      }
+    }
+  }
+}

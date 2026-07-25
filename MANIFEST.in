@@ -1,0 +1,11 @@
+include LICENSE
+include pyproject.toml
+include server.py
+include model_orchestra/PUBLIC_README.md
+recursive-include model_orchestra *.py *.json
+prune tests
+prune docs
+prune release_pipeline
+exclude README.md
+exclude config.json
+exclude .mcp.json

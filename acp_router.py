@@ -1,9 +1,9 @@
-"""ACP external agent that pins GPT-5.6 Terra or Sol per Zed session."""
+"""ACP external agent that auto-selects Terra, K3, or Sol per substantive turn."""
 
 from __future__ import annotations
 
 import asyncio
-import os
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -40,6 +40,7 @@ import server
 MODEL_SETTING = "model"
 MODEL_NAMES = {
     "terra": "GPT-5.6 Terra",
+    "k3": "Kimi K3",
     "sol": "GPT-5.6 Sol",
 }
 MAX_TOOL_STEPS = 8
@@ -84,11 +85,17 @@ TOOLS = [
 ]
 
 SYSTEM_PROMPT = """You are Model Orchestra Auto, a pragmatic coding agent in Zed.
-Use the workspace tools before assuming implementation details. Keep changes focused,
-validate the changed surface, and report concrete results. You are in a session pinned
-to one model: do not discuss or change the selected model unless asked. Use Zed-backed
-tools for all workspace and terminal operations. Do not expose credentials or read files
-outside the workspace. Request only the tools needed to complete the task."""
+Use the workspace tools before assuming implementation details. For substantial
+non-security repository implementation, work as the Kimi K3 implementation worker;
+keep architecture, review, and final acceptance explicit. Tiny local edits may stay
+with the host. Security, exploit, cryptography, malware, and forensics work belongs
+on Sol. Keep changes focused, validate the changed surface, and report concrete
+results. Auto routing is recomputed for each substantive turn. A transition to a
+new model starts a fresh model context so provider-specific thinking and tool blocks
+are never replayed across incompatible models. An explicitly selected model remains
+pinned after work begins. Use Zed-backed tools for all workspace and terminal
+operations. Do not expose credentials or read files outside the workspace. Request
+only the tools needed to complete the task."""
 
 
 @dataclass
@@ -98,24 +105,28 @@ class SessionState:
     resolved_model: str | None = None
     messages: list[dict[str, Any]] = field(default_factory=list)
     current_task: asyncio.Task[Any] | None = None
+    turns_started: int = 0
+    current_returned_chars: int = 0
 
 
 def route_auto(prompt: str) -> str:
-    """Route security-sensitive first prompts to Sol and everything else to Terra."""
-    return "sol" if server._is_security(prompt) else "terra"
+    """Choose Sol for security, K3 for repository work, otherwise Terra."""
+    if server._is_security(prompt):
+        return "sol"
+    return "k3" if server._task_kind(prompt) == "repository" else "terra"
 
 
 def _workspace_path(workspace: Path, requested: str) -> str:
     if not isinstance(requested, str) or not requested.strip():
         raise ValueError("path must be a non-empty workspace-relative path")
-    root = os.path.abspath(str(workspace))
-    target = os.path.abspath(requested if os.path.isabs(requested) else os.path.join(root, requested))
+    root = workspace.resolve()
+    candidate = Path(requested)
+    target = (candidate if candidate.is_absolute() else root / candidate).resolve()
     try:
-        if os.path.commonpath((root, target)) != root:
-            raise ValueError("path must remain inside the workspace")
+        target.relative_to(root)
     except ValueError as error:
         raise ValueError("path must remain inside the workspace") from error
-    return target
+    return str(target)
 
 
 def _config_options(state: SessionState) -> list[SessionConfigOptionSelect]:
@@ -123,13 +134,14 @@ def _config_options(state: SessionState) -> list[SessionConfigOptionSelect]:
         SessionConfigOptionSelect(
             id=MODEL_SETTING,
             name="Model",
-            description="Auto chooses once from the first substantive prompt.",
+            description="Auto routes every substantive turn; explicit selections pin after work starts.",
             category="model",
             type="select",
             currentValue=state.model_setting,
             options=[
                 SessionConfigSelectOption(value="auto", name="Auto"),
                 SessionConfigSelectOption(value="terra", name=MODEL_NAMES["terra"]),
+                SessionConfigSelectOption(value="k3", name=MODEL_NAMES["k3"]),
                 SessionConfigSelectOption(value="sol", name=MODEL_NAMES["sol"]),
             ],
         )
@@ -194,13 +206,13 @@ class ModelOrchestraAuto(Agent):
         self, config_id: str, session_id: str, value: str | bool, **_: Any
     ) -> SetSessionConfigOptionResponse | None:
         state = self._session(session_id)
-        if config_id != MODEL_SETTING or value not in {"auto", "terra", "sol"}:
+        if config_id != MODEL_SETTING or value not in {"auto", "terra", "k3", "sol"}:
             return None
-        if state.resolved_model is not None and value != state.resolved_model:
-            raise ValueError("the model is pinned after the first substantive prompt")
-        state.model_setting = str(value)
-        if value in MODEL_NAMES:
-            state.resolved_model = str(value)
+        selected = str(value)
+        if state.turns_started and selected != state.model_setting:
+            raise ValueError("the model setting is locked after the first substantive prompt")
+        state.model_setting = selected
+        state.resolved_model = selected if selected in MODEL_NAMES else None
         return SetSessionConfigOptionResponse(configOptions=_config_options(state))
 
     async def prompt(self, session_id: str, prompt: list[Any], **_: Any) -> PromptResponse:
@@ -209,20 +221,52 @@ class ModelOrchestraAuto(Agent):
         if not prompt_text:
             await self._send_text(session_id, "Please provide a text prompt.")
             return PromptResponse(stopReason="end_turn")
-        if state.resolved_model is None:
-            state.resolved_model = (
-                state.model_setting if state.model_setting != "auto" else route_auto(prompt_text)
-            )
+        next_model = (
+            state.model_setting
+            if state.model_setting != "auto"
+            else route_auto(prompt_text)
+        )
+        if (
+            state.model_setting == "auto"
+            and state.resolved_model is not None
+            and state.resolved_model != next_model
+        ):
+            state.messages.clear()
+        state.resolved_model = next_model
         state.messages.append({"role": "user", "content": prompt_text})
         state.current_task = asyncio.current_task()
+        state.turns_started += 1
+        state.current_returned_chars = 0
+        operation = {"tool_steps": 0, "parent": server._ORCHESTRATION_COLLECTOR.get()}
+        operation_token = server._ORCHESTRATION_COLLECTOR.set(operation)
+        started = time.monotonic()
+        route = {"terra": None, "k3": "repository-edit", "sol": "security"}[next_model]
         try:
-            return await self._run_turn(session_id, state)
+            response = await self._run_turn(session_id, state)
+            server._track_orchestration(
+                "acp_auto", route, [next_model], "success", None,
+                time.monotonic() - started, operation.get("tool_steps", 0),
+                state.current_returned_chars,
+            )
+            return response
         except asyncio.CancelledError:
+            server._track_orchestration(
+                "acp_auto", route, [next_model], "cancelled", "host_cancelled",
+                time.monotonic() - started, operation.get("tool_steps", 0),
+                state.current_returned_chars,
+            )
             return PromptResponse(stopReason="cancelled")
         except Exception as error:
-            await self._send_text(session_id, f"Model Orchestra error: {error}")
+            diagnostic = f"Model Orchestra error: {server._safe_error(error)}"
+            await self._send_text(session_id, diagnostic)
+            server._track_orchestration(
+                "acp_auto", route, [next_model], "infrastructure_failure",
+                "worker_error", time.monotonic() - started,
+                operation.get("tool_steps", 0), state.current_returned_chars,
+            )
             return PromptResponse(stopReason="end_turn")
         finally:
+            server._ORCHESTRATION_COLLECTOR.reset(operation_token)
             state.current_task = None
 
     async def cancel(self, session_id: str, **_: Any) -> None:
@@ -265,10 +309,20 @@ class ModelOrchestraAuto(Agent):
             raise RuntimeError("missing gateway credential: configure one of " + ", ".join(names))
         last_error: Exception | None = None
         retries = 3
+        deadline = time.monotonic() + server.CASCADE_DEADLINE
         for attempt in range(retries):
-            for key in keys:
-                client = anthropic.AsyncAnthropic(base_url=server.PROVIDERS[provider]["base_url"], api_key=key)
+            for key_index, key in enumerate(keys):
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise last_error or TimeoutError("ACP cascade deadline exceeded")
+                client = anthropic.AsyncAnthropic(
+                    base_url=server.PROVIDERS[provider]["base_url"], api_key=key
+                )
                 try:
+                    server._record_event(
+                        "provider_attempt", provider=provider,
+                        key_index=key_index, attempt=attempt + 1,
+                    )
                     async with client.messages.stream(
                         model=model_id,
                         max_tokens=server.AGENT_MAX_TOKENS,
@@ -276,7 +330,7 @@ class ModelOrchestraAuto(Agent):
                         system=server._cacheable_system(SYSTEM_PROMPT),
                         messages=state.messages,
                         tools=TOOLS,
-                        timeout=server.REQUEST_TIMEOUT,
+                        timeout=min(server.REQUEST_TIMEOUT, remaining),
                     ) as stream:
                         async for text in stream.text_stream:
                             await self._send_text(session_id, text)
@@ -286,6 +340,8 @@ class ModelOrchestraAuto(Agent):
                             server.AnthropicUsage(
                                 message.usage.input_tokens,
                                 message.usage.output_tokens,
+                                int(getattr(message.usage, "cache_read_input_tokens", 0) or 0),
+                                int(getattr(message.usage, "cache_creation_input_tokens", 0) or 0),
                             ),
                         )
                         return message
@@ -296,11 +352,23 @@ class ModelOrchestraAuto(Agent):
                     if not server._key_exhausted(error) and not server._is_transient(error):
                         raise
                     if server._key_exhausted(error):
+                        if key_index < len(keys) - 1:
+                            server._record_event(
+                                "key_rotation", provider=provider,
+                                from_key_index=key_index,
+                                to_key_index=key_index + 1,
+                            )
                         continue
                 finally:
                     await client.close()
             if last_error is not None and server._is_transient(last_error) and attempt < retries - 1:
-                await asyncio.sleep(0.5 * (2 ** attempt))
+                pause = 0.5 * (2 ** attempt)
+                if pause >= deadline - time.monotonic():
+                    raise last_error
+                server._record_event(
+                    "provider_retry", provider=provider, attempt=attempt + 1
+                )
+                await asyncio.sleep(pause)
                 continue
             break
         assert last_error is not None
@@ -308,6 +376,7 @@ class ModelOrchestraAuto(Agent):
 
     async def _execute_tool(self, session_id: str, state: SessionState, tool_use: Any) -> str:
         name = tool_use.name
+        server._record_agent_tool_step(state.resolved_model or "terra", name)
         tool_id = f"tool-{tool_use.id}"
         kind = {"read_file": "read", "write_file": "edit", "run_terminal": "execute"}.get(name, "other")
         await self._update_tool(session_id, start_tool_call(tool_id, name, kind=kind, status="in_progress", raw_input=tool_use.input))
@@ -323,7 +392,7 @@ class ModelOrchestraAuto(Agent):
             await self._update_tool(session_id, update_tool_call(tool_id, status="completed", content=[tool_content(text_block(result[:MAX_TERMINAL_OUTPUT]))]))
             return result
         except Exception as error:
-            result = f"Tool error: {error}"
+            result = f"Tool error: {server._safe_error(error)}"
             await self._update_tool(session_id, update_tool_call(tool_id, status="failed", content=[tool_content(text_block(result))]))
             return result
 
@@ -338,6 +407,8 @@ class ModelOrchestraAuto(Agent):
         content = data.get("content")
         if not isinstance(content, str):
             raise ValueError("content must be text")
+        if len(content) > MAX_FILE_CHARS:
+            raise ValueError(f"content exceeds {MAX_FILE_CHARS:,} characters")
         await self._require_permission(session_id, tool_id, "Write file")
         await self._connection().write_text_file(session_id, path, content)
         return f"Wrote {path}"
@@ -371,6 +442,9 @@ class ModelOrchestraAuto(Agent):
 
     async def _send_text(self, session_id: str, text: str) -> None:
         if text:
+            state = self._sessions.get(session_id)
+            if state is not None:
+                state.current_returned_chars += len(text)
             await self._connection().session_update(session_id, update_agent_message(text_block(text)))
 
     async def _update_tool(self, session_id: str, update: Any) -> None:

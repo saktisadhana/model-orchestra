@@ -3,6 +3,7 @@ import os
 import re
 import sys
 import pathlib
+import pytest
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 import server
@@ -111,11 +112,8 @@ def test_routing_accuracy():
 
     accuracy = correct / len(ROUTING_TESTS)
     print(f"Routing Accuracy: {accuracy*100:.1f}% ({correct}/{len(ROUTING_TESTS)})")
-    if accuracy < 0.8:
-        print("FAIL: Routing accuracy below 80%")
-        return False
+    assert accuracy >= 0.8, "Routing accuracy below 80%"
     print("PASS: Routing accuracy OK")
-    return True
 
 
 def test_security_routing():
@@ -147,9 +145,8 @@ def test_security_routing():
         print("FAIL: benign task incorrectly routed to 'security'")
         ok = False
 
-    print("PASS: security tasks floored to strong models" if ok
-          else "FAIL: CybSec routing floor broken")
-    return ok
+    assert ok, "CybSec routing floor broken"
+    print("PASS: security tasks floored to strong models")
 
 
 def test_truncation_safety():
@@ -157,20 +154,16 @@ def test_truncation_safety():
     long_content = "def long_function():\n" + "    # filler\n" * 2000 + "    return True\n"
     truncated = _truncate(long_content, limit=1000)
 
-    if "[TRUNCATED" not in truncated:
-        print("FAIL: TRUNCATED marker not found")
-        return False
-    if "def long_function():" not in truncated:
-        print("FAIL: Function signature lost")
-        return False
-    if "return True" not in truncated:
-        print("FAIL: Return statement lost")
-        return False
+    assert "[TRUNCATED" in truncated, "TRUNCATED marker not found"
+    assert "def long_function():" in truncated, "Function signature lost"
+    assert "return True" in truncated, "Return statement lost"
 
     print("PASS: Truncation safety OK")
-    return True
 
 
+@pytest.mark.live
+@pytest.mark.network
+@pytest.mark.paid
 def test_failover():
     print("\n--- Test 4: Failover Chain ---")
 
@@ -197,9 +190,12 @@ def test_failover():
         else:
             del os.environ[PROVIDERS["opencode-go"]["api_key_env"]]
 
-    return passed
+    assert passed, "Failover did not return a valid response"
 
 
+@pytest.mark.live
+@pytest.mark.network
+@pytest.mark.paid
 def test_pipeline_quality():
     """Now EXECUTES generated code and asserts behavior, not keyword presence."""
     print("\n--- Test 1: Pipeline Quality (execution-checked) ---")
@@ -276,9 +272,12 @@ def test_pipeline_quality():
 
     accuracy = passed_count / total
     print(f"\nPipeline Quality: {accuracy*100:.1f}% ({passed_count}/{total})")
-    return accuracy >= 0.8
+    assert accuracy >= 0.8, "Pipeline quality below 80%"
 
 
+@pytest.mark.live
+@pytest.mark.network
+@pytest.mark.paid
 def test_batch_delegate():
     print("\n--- Test 3: Batch Delegate ---")
     tasks_json = json.dumps([
@@ -287,30 +286,26 @@ def test_batch_delegate():
     ])
 
     try:
-        res = batch_delegate(tasks_json)
-        if "### Task 1:" in res and "### Task 2:" in res and "def" in res:
-            print("PASS: Batch delegate successful")
-            return True
-        else:
-            print("FAIL: Batch delegate output missing expected parts")
-            print(f"Output: {res}")
-            return False
+        res = batch_delegate(tasks_json, inline=True)
+        assert "### Task 1:" in res and "### Task 2:" in res and "def" in res, (
+            "Batch delegate output missing expected parts"
+        )
+        print("PASS: Batch delegate successful")
     except Exception as e:
-        print(f"FAIL: Batch delegate raised exception {e}")
-        return False
+        raise AssertionError(f"Batch delegate raised exception {e}") from e
 
 
 if __name__ == "__main__":
-    t2 = test_routing_accuracy()
-    t6 = test_security_routing()
-    t5 = test_truncation_safety()
-    t4 = test_failover()
-    t3 = test_batch_delegate()
-    t1 = test_pipeline_quality()
-
-    if t1 and t2 and t3 and t4 and t5 and t6:
+    try:
+        test_routing_accuracy()
+        test_security_routing()
+        test_truncation_safety()
+        test_failover()
+        test_batch_delegate()
+        test_pipeline_quality()
+    except AssertionError:
+        print("\nSOME TESTS FAILED. See output above.")
+        raise
+    else:
         print("\nALL TESTS PASSED! The system is smart and optimized.")
         sys.exit(0)
-    else:
-        print("\nSOME TESTS FAILED. See output above.")
-        sys.exit(1)
