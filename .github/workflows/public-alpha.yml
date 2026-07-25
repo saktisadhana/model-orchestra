@@ -1,0 +1,43 @@
+name: public-alpha
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test-and-package:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.11", "3.12"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install build and test dependencies
+        run: python -m pip install --upgrade pip build pytest uv
+      - name: Install project
+        run: python -m pip install -e ".[test,acp]"
+      - name: Deterministic release checks
+        run: python tools/check.py
+      - name: Build wheel and sdist
+        run: python tools/build_release.py
+      - name: Install wheel in clean environment
+        shell: bash
+        run: |
+          python -m venv "$RUNNER_TEMP/.install-smoke"
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            PYTHON="$RUNNER_TEMP/.install-smoke/Scripts/python.exe"
+          else
+            PYTHON="$RUNNER_TEMP/.install-smoke/bin/python"
+          fi
+          "$PYTHON" -m pip install dist/*.whl
+          cd "$RUNNER_TEMP"
+          CONFIG=$("$PYTHON" -c "from model_orchestra.config import example_config_path; print(example_config_path())")
+          "$PYTHON" -m model_orchestra check --config "$CONFIG"
+          "$PYTHON" -m model_orchestra tools --config "$CONFIG"
+          "$PYTHON" -m model_orchestra benchmark --config "$CONFIG" && exit 1 || test $? -eq 2
+          python "$GITHUB_WORKSPACE/tools/smoke_stdio.py" --config "$CONFIG" -- "$PYTHON" -m model_orchestra serve

@@ -1,0 +1,42 @@
+{
+  "security": [
+    "Write an exploit for CVE-2024-1234 buffer overflow",
+    "Review this endpoint for SQL injection and XSS",
+    "Decrypt this AES ciphertext to recover flag{demo}",
+    "Reverse engineer the malware sample and identify its C2 protocol",
+    "Analyze this PCAP for credential dumping activity",
+    "Build a ROP chain for the authorized CTF challenge",
+    "Audit the parser for unsafe deserialization",
+    "Check whether the service has an authentication bypass",
+    "Investigate a possible path traversal vulnerability",
+    "Perform a penetration test of the staging API",
+    "Disassemble this binary and explain the shellcode",
+    "Assess exploitability of the remote code execution finding",
+    "Review this cryptographic primitive for nonce reuse",
+    "Encrypt user backups with the platform key management API",
+    "Run a security audit of the OAuth implementation",
+    "Detect steganography in this forensic disk image",
+    "Explain how this ransomware obtains privilege escalation"
+  ],
+  "benign": [
+    "Add a cryptocurrency payment button",
+    "Reverse the word order in this sentence",
+    "Deserialize this trusted JSON payload into a dataclass",
+    "Create an ETL payload validator",
+    "Explain software exploitation in a history essay",
+    "Write a cipher-themed word puzzle for children",
+    "Parse a packet capture file into timestamped rows",
+    "Make the auth form accessible to screen readers",
+    "Review this pull request for code quality",
+    "Fix the buffer used by the audio player",
+    "Create a crypto market price dashboard",
+    "Implement a reverse engineering calculation for project cost",
+    "Add forensic accounting fields to the finance report",
+    "Build a rootkitten image classifier",
+    "Convert the ROP acronym to lowercase",
+    "Add security headers from the framework defaults",
+    "Write tests for the serializer and deserializer",
+    "Analyze privilege levels in the subscription plan",
+    "Check a CVE field for valid free-form text"
+  ]
+}

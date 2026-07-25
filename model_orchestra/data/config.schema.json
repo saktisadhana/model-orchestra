@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://model-orchestra.dev/schema/config-v1.json",
+  "title": "Model Orchestra configuration v1",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "providers",
+    "workers",
+    "pipelines",
+    "cost_control",
+    "budget"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "providers": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "object",
+        "required": ["base_url", "api_key_env"],
+        "properties": {
+          "base_url": {"type": "string", "minLength": 1},
+          "api_key_env": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]*$"},
+          "api_key_envs": {
+            "type": "array",
+            "items": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]*$"}
+          },
+          "client": {"enum": ["openai", "anthropic"]}
+        },
+        "additionalProperties": true
+      }
+    },
+    "workers": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {"type": "string", "pattern": "^[^/]+/.+$"}
+    },
+    "pipelines": {"type": "object"},
+    "tiers": {"type": "object"},
+    "cost_control": {
+      "type": "object",
+      "required": ["host_model", "implementation_model", "objective"],
+      "properties": {
+        "host_model": {"type": "string"},
+        "implementation_model": {"type": "string"},
+        "objective": {"enum": ["strict_savings", "preserve_strong_model"]}
+      },
+      "additionalProperties": true
+    },
+    "budget": {
+      "type": "object",
+      "required": [
+        "currency",
+        "provider_groups",
+        "provider_limits",
+        "billing_modes",
+        "pricing_per_million_tokens"
+      ],
+      "properties": {
+        "currency": {"type": "string", "minLength": 1},
+        "state_file": {"type": "string"},
+        "database_file": {"type": "string"},
+        "provider_groups": {"type": "object"},
+        "provider_limits": {"type": "object"},
+        "billing_modes": {"type": "object"},
+        "pricing_per_million_tokens": {"type": "object"}
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

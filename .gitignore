@@ -1,3 +1,13 @@
 .env
 __pycache__/
 *.pyc
+.obsidian/
+.model-orchestra-budget.json
+.model-orchestra-budget.json.tmp
+.model-orchestra-budget.sqlite3
+.model-orchestra-budget.sqlite3-shm
+.model-orchestra-budget.sqlite3-wal
+.model-orchestra-artifacts/
+.pytest_cache/
+.pytest-cache/
+*.egg-info/

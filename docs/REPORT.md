@@ -1,6 +1,9 @@
 # model-orchestra — swarm benchmark
 
-Real run, 6 coding tasks, results verified by executing the generated code against unit tests. Numbers are from live API calls — rerun to reproduce.
+**Historical snapshot:** This report records an earlier benchmark. It is not a
+current model-quality or pricing guarantee.
+
+Historical snapshot from a real run of 6 coding tasks, verified by executing the generated code against unit tests. The original generation timestamp and configuration hash were not recorded; rerun `benchmark.py` to produce a report with provenance.
 
 - **BEFORE** — single model (`flash`), one attempt per task.
 - **AFTER** — swarm `flash, mimo, ds-pro` run in parallel; task counts as solved if ANY worker's code passes the tests (verified best-of-N).

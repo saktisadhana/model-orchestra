@@ -1,0 +1,17 @@
+{
+  "schema_version": 2,
+  "suite_sha256": "1ca449ce3bc0",
+  "models": {
+    "flash": "opencode-go/deepseek-v4-flash",
+    "mimo": "opencode-go/mimo-v2.5",
+    "ds-pro": "opencode-go/deepseek-v4-pro"
+  },
+  "minimum_passed": {
+    "single": 5,
+    "swarm": 5
+  },
+  "minimum_saving_percent": {
+    "single": 10.0
+  },
+  "rationale": "Allow one nondeterministic correctness miss while requiring the default Single Flash path to remain at least 10% cheaper end to end than current-host Terra generation. The swarm is diagnostic, not the default cost route."
+}

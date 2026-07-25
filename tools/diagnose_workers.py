@@ -6,7 +6,9 @@ Run: python diagnose_workers.py
 """
 import concurrent.futures as cf
 
-from server import WORKERS, resolve, client_for
+import sys, pathlib
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+from server import WORKERS, resolve, client_for, PROVIDERS, _anthropic_text
 
 REQ_TIMEOUT = 15  # seconds per HTTP call; hung providers fail fast, no stall
 
@@ -19,13 +21,19 @@ def _probe(alias: str) -> tuple[str, str]:
     try:
         # Direct call (no failover) with a hard request timeout, so a dead/hung
         # model shows its REAL status instead of masking behind a Groq fallback.
-        r = client_for(provider).chat.completions.create(
-            model=model_id,
-            messages=[{"role": "user", "content": "Reply with the single word: ok"}],
-            temperature=0,
-            timeout=REQ_TIMEOUT,
-        )
-        out = (r.choices[0].message.content or "").strip()
+        # Gateway workers use the Anthropic client (no .chat.completions).
+        client = client_for(provider)
+        msg = [{"role": "user", "content": "Reply with the single word: ok"}]
+        if PROVIDERS[provider].get("client") == "anthropic":
+            r = client.messages.create(
+                model=model_id, max_tokens=16, messages=msg, timeout=REQ_TIMEOUT,
+            )
+            out = _anthropic_text(r.content).strip()
+        else:
+            r = client.chat.completions.create(
+                model=model_id, messages=msg, temperature=0, timeout=REQ_TIMEOUT,
+            )
+            out = (r.choices[0].message.content or "").strip()
         first = out.splitlines()[0][:40] if out else "(empty)"
         return alias, f"OK  [{provider}/{model_id}]  -> {first!r}"
     except Exception as e:

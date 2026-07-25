@@ -1,0 +1,102 @@
+name: ci
+on:
+  push:
+  pull_request:
+
+jobs:
+  offline:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.11", "3.12"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install build tools
+        run: python -m pip install --upgrade pip build
+
+      - name: Install package in editable mode
+        run: python -m pip install -e ".[test,acp]"
+
+      - name: Pytest
+        run: python -m pytest -q
+
+      - name: Usefulness benchmark
+        run: python tools/usefulness_benchmark.py --check
+
+      - name: Benchmark baseline
+        run: python tools/benchmark.py --check-baseline
+
+      - name: Resolve tests
+        run: python tests/test_resolve.py
+
+      - name: Compile check
+        run: python -m compileall -q server.py model_orchestra tools tests
+
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    needs: offline
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install build tools
+        run: python -m pip install --upgrade pip build
+
+      - name: Build wheel
+        run: python -m build
+
+      # Linux (bash) – clean venv outside checkout
+      - name: Smoke test (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          VENV_DIR="$(mktemp -d)/venv"
+          python -m venv "$VENV_DIR"
+          "$VENV_DIR/bin/pip" install dist/*.whl
+
+          CFG_DIR="$(mktemp -d)"
+          CONFIG=$("$VENV_DIR/bin/python" -c "from model_orchestra.config import example_config_path; print(example_config_path())")
+          cp "$CONFIG" "$CFG_DIR/config.json"
+
+          "$VENV_DIR/bin/model-orchestra" check --config "$CFG_DIR/config.json"
+          "$VENV_DIR/bin/model-orchestra" tools --config "$CFG_DIR/config.json"
+
+      # Windows (pwsh) – clean venv outside checkout
+      - name: Smoke test (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $venvDir = Join-Path ([System.IO.Path]::GetTempPath()) ([System.IO.Path]::GetRandomFileName())
+          python -m venv $venvDir
+          $wheel = (Get-ChildItem dist\*.whl | Select-Object -First 1).FullName
+          & "$venvDir\Scripts\pip.exe" install $wheel
+
+          $cfgDir = Join-Path ([System.IO.Path]::GetTempPath()) ([System.IO.Path]::GetRandomFileName())
+          New-Item -ItemType Directory -Path $cfgDir | Out-Null
+          $CONFIG = & "$venvDir\Scripts\python.exe" -c "from model_orchestra.config import example_config_path; print(example_config_path())"
+          Copy-Item $CONFIG "$cfgDir\config.json"
+
+          & "$venvDir\Scripts\model-orchestra.exe" check --config "$cfgDir\config.json"
+          & "$venvDir\Scripts\model-orchestra.exe" tools --config "$cfgDir\config.json"
+
+      - name: Upload dist
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.os }}
+          path: dist/
