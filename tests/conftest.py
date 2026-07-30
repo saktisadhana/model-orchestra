@@ -15,6 +15,7 @@ def isolate_offline_state(request: pytest.FixtureRequest, monkeypatch: pytest.Mo
 
     monkeypatch.setattr(server, "BUDGET_STATE_PATH", tmp_path / "budget.json")
     monkeypatch.setattr(server, "BUDGET_DB_PATH", tmp_path / "budget.sqlite3")
+    monkeypatch.setattr(server, "DOGFOOD_DB_PATH", tmp_path / "dogfood.sqlite3")
     if request.node.get_closest_marker("network") is not None:
         return
 

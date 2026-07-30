@@ -21,6 +21,7 @@
         "required": ["base_url", "api_key_env"],
         "properties": {
           "base_url": {"type": "string", "minLength": 1},
+          "enabled": {"type": "boolean", "default": true},
           "api_key_env": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]*$"},
           "api_key_envs": {
             "type": "array",
@@ -61,6 +62,7 @@
         "currency": {"type": "string", "minLength": 1},
         "state_file": {"type": "string"},
         "database_file": {"type": "string"},
+        "dogfood_database_file": {"type": "string"},
         "provider_groups": {"type": "object"},
         "provider_limits": {"type": "object"},
         "billing_modes": {"type": "object"},

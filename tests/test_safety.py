@@ -34,37 +34,25 @@ ROOT = _ROOT
 SECRET_PATTERN = re.compile(r"sk-[A-Za-z0-9_-]{20,}")
 
 
-def test_gateway_key_order_and_legacy_fallback() -> None:
-    provider = "68886868"
-    names = server.PROVIDERS[provider]["api_key_envs"]
-    original = {name: server.os.environ.get(name) for name in names}
-    legacy_name = server.PROVIDERS[provider]["api_key_env"]
-    legacy = server.os.environ.get(legacy_name)
-    legacy_fallbacks = server.os.environ.get(legacy_name + "_FALLBACKS")
+def test_active_provider_key_order_and_legacy_fallback() -> None:
+    provider = "opencode-go"
+    primary_name = server.PROVIDERS[provider]["api_key_env"]
+    fallback_name = primary_name + "_FALLBACKS"
+    primary = server.os.environ.get(primary_name)
+    fallbacks = server.os.environ.get(fallback_name)
     try:
-        for name, value in zip(names, ("lite-one", "lite-two", "pro")):
-            server.os.environ[name] = value
-        server.os.environ[legacy_name] = "legacy"
-        server.os.environ[legacy_name + "_FALLBACKS"] = "legacy-two"
-        assert server._keys_for(provider) == ["lite-one", "lite-two", "pro"]
-
-        for name in names:
-            server.os.environ.pop(name, None)
-        assert server._keys_for(provider) == ["legacy", "legacy-two"]
+        server.os.environ[primary_name] = "primary"
+        server.os.environ[fallback_name] = "secondary, primary, tertiary"
+        assert server._keys_for(provider) == ["primary", "secondary", "tertiary"]
     finally:
-        for name, value in original.items():
-            if value is None:
-                server.os.environ.pop(name, None)
-            else:
-                server.os.environ[name] = value
-        if legacy is None:
-            server.os.environ.pop(legacy_name, None)
+        if primary is None:
+            server.os.environ.pop(primary_name, None)
         else:
-            server.os.environ[legacy_name] = legacy
-        if legacy_fallbacks is None:
-            server.os.environ.pop(legacy_name + "_FALLBACKS", None)
+            server.os.environ[primary_name] = primary
+        if fallbacks is None:
+            server.os.environ.pop(fallback_name, None)
         else:
-            server.os.environ[legacy_name + "_FALLBACKS"] = legacy_fallbacks
+            server.os.environ[fallback_name] = fallbacks
 
 
 def test_context_overflow_stops_key_rotation() -> None:
@@ -201,12 +189,12 @@ def test_judgment_requests_stay_with_host() -> None:
         assert plan["capability_floor"] == "host-judgment"
 
 
-def test_repository_edits_use_k3_without_an_agent_hint() -> None:
+def test_repository_edits_use_configured_agent_without_an_agent_hint() -> None:
     plan = server._route_plan("Fix the bug in parser.py", agent=False)
     assert plan["task_kind"] == "repository"
     assert plan["eligible_routes"] == ["repository-edit"]
     assert plan["selected_route"] == "repository-edit"
-    assert plan["selected_models"] == ["k3"]
+    assert plan["selected_models"] == ["k27-oc"]
     assert plan["requires_agent"] is True
     assert plan["agent"] is True
     assert "capability-first" in plan["reason"]
@@ -216,20 +204,20 @@ def test_repository_edits_use_k3_without_an_agent_hint() -> None:
     assert tiny["selected_route"] is None
     assert tiny["capability_floor"] == "host-local"
 
-    # An explicit cap can block K3, but routing never downgrades a workspace edit
+    # An explicit cap can block the agent, but routing never downgrades a workspace edit
     # into stateless generation.
     capped = server._route_plan("Fix the bug in parser.py", max_cost_idr=0.01)
     assert capped["selected_route"] is None
     assert capped["agent"] is True
     assert "explicit cost cap" in capped["reason"]
 
-    assert server.PIPELINES["repository-edit"]["single"] == server.IMPLEMENTATION_MODEL == "k3"
+    assert server.PIPELINES["repository-edit"]["single"] == server.IMPLEMENTATION_MODEL == "k27-oc"
     assert server.pipeline("Fix parser.py", mode="repository-edit", agent=False) == (
         "ERROR: repository-edit requires agent=True"
     )
     assert server.pipeline(
         "Fix parser.py", mode="draft-refine", agent=True
-    ).startswith("ERROR: repository implementation requires the K3")
+    ).startswith("ERROR: repository implementation requires the configured")
 
 
 def test_auto_delegate_infers_k3_agent_mode() -> None:
@@ -249,42 +237,68 @@ def test_auto_delegate_infers_k3_agent_mode() -> None:
     assert calls == [("repository-edit", True, "workspace-k3")]
 
 
-def test_k3_agent_reads_edits_and_returns_summary_with_mocked_calls() -> None:
+def test_workspace_agent_reads_edits_and_returns_summary_with_mocked_calls() -> None:
     original_create = server._create_with_retry
     original_track = server._track
     original_budget_check = server._budget_check
+
+    def response(*, content: str | None = None, tool_call=None, input_tokens: int,
+                 output_tokens: int) -> SimpleNamespace:
+        tool_calls = [tool_call] if tool_call is not None else []
+        message = SimpleNamespace(
+            content=content,
+            tool_calls=tool_calls,
+            model_dump=lambda exclude_none=True: {
+                "role": "assistant",
+                **({"content": content} if content is not None else {}),
+                **({"tool_calls": [{
+                    "id": call.id,
+                    "type": "function",
+                    "function": {
+                        "name": call.function.name,
+                        "arguments": call.function.arguments,
+                    },
+                } for call in tool_calls]} if tool_calls else {}),
+            },
+        )
+        return SimpleNamespace(
+            choices=[SimpleNamespace(message=message)],
+            usage=SimpleNamespace(
+                prompt_tokens=input_tokens,
+                completion_tokens=output_tokens,
+                prompt_tokens_details=SimpleNamespace(cached_tokens=0),
+            ),
+        )
+
     responses = iter([
-        SimpleNamespace(
-            stop_reason="tool_use",
-            content=[SimpleNamespace(
-                type="tool_use", id="tool-1", name="read_file",
-                input={"path": "src/result.py"},
-            )],
-            usage=SimpleNamespace(
-                input_tokens=10, output_tokens=5,
-                cache_read_input_tokens=0, cache_creation_input_tokens=0,
+        response(
+            tool_call=SimpleNamespace(
+                id="tool-1",
+                function=SimpleNamespace(
+                    name="read_file",
+                    arguments=json.dumps({"path": "src/result.py"}),
+                ),
             ),
+            input_tokens=10,
+            output_tokens=5,
         ),
-        SimpleNamespace(
-            stop_reason="tool_use",
-            content=[SimpleNamespace(
-                type="tool_use", id="tool-2", name="edit_file",
-                input={"path": "src/result.py", "edits": [{
-                    "old_text": "value = 41", "new_text": "value = 42"
-                }]},
-            )],
-            usage=SimpleNamespace(
-                input_tokens=12, output_tokens=5,
-                cache_read_input_tokens=0, cache_creation_input_tokens=0,
+        response(
+            tool_call=SimpleNamespace(
+                id="tool-2",
+                function=SimpleNamespace(
+                    name="edit_file",
+                    arguments=json.dumps({"path": "src/result.py", "edits": [{
+                        "old_text": "value = 41", "new_text": "value = 42"
+                    }]}),
+                ),
             ),
+            input_tokens=12,
+            output_tokens=5,
         ),
-        SimpleNamespace(
-            stop_reason="end_turn",
-            content=[SimpleNamespace(type="text", text="Read and updated src/result.py")],
-            usage=SimpleNamespace(
-                input_tokens=14, output_tokens=4,
-                cache_read_input_tokens=0, cache_creation_input_tokens=0,
-            ),
+        response(
+            content="Read and updated src/result.py",
+            input_tokens=14,
+            output_tokens=4,
         ),
     ])
 
@@ -307,7 +321,7 @@ def test_k3_agent_reads_edits_and_returns_summary_with_mocked_calls() -> None:
             target.write_bytes(b"value = 41\n")
             result = server.delegate(
                 "Implement the result module in the existing project",
-                model="k3", agent=True, workspace=directory,
+                model=server.IMPLEMENTATION_MODEL, agent=True, workspace=directory,
             )
             assert target.read_text(encoding="utf-8") == "value = 42\n"
     finally:
@@ -339,7 +353,7 @@ def test_orchestrate_change_returns_manifest_and_host_handoff() -> None:
 
     assert payload["status"] == "success"
     assert payload["fallback_category"] is None
-    assert payload["route_decision"]["selected_models"] == ["k3"]
+    assert payload["route_decision"]["selected_models"] == ["k27-oc"]
     assert payload["changed_files"] == [{
         "path": "src/changed.py",
         "change": "added",
@@ -403,8 +417,8 @@ def test_direct_delegate_guards_and_audits_capability_overrides() -> None:
     finally:
         server._delegate_impl = original_impl
 
-    assert security == "ERROR: security tasks require the Sol model"
-    assert repository.startswith("ERROR: repository agent tasks require k3")
+    assert "security capability is unavailable" in security.lower()
+    assert repository.startswith("ERROR: repository agent tasks require k27-oc")
     assert override == "ok"
     assert calls == ["flash"]
     telemetry = server._orchestration_snapshot(detail=True)
@@ -417,25 +431,34 @@ def test_direct_delegate_guards_and_audits_capability_overrides() -> None:
 
 def test_direct_delegate_requires_economic_override_for_losing_metered_route() -> None:
     original_impl = server._delegate_impl
+    original_billing = server.BUDGET_BILLING_MODES
     calls: list[str] = []
     server._delegate_impl = lambda task, model="flash", **kwargs: (
         calls.append(model) or "ok"
     )
     try:
-        blocked = server.delegate("Write a small helper function", model="k3")
+        server.BUDGET_BILLING_MODES = {
+            **original_billing,
+            "opencode-go": {
+                "mode": "metered",
+                "metered_overage_enabled": False,
+            },
+        }
+        blocked = server.delegate("Write a small helper function", model="k27-oc")
         allowed = server.delegate(
-            "Write a small helper function", model="k3",
+            "Write a small helper function", model="k27-oc",
             allow_economic_override=True,
         )
     finally:
         server._delegate_impl = original_impl
+        server.BUDGET_BILLING_MODES = original_billing
 
     assert "economic override" in blocked.lower()
     assert allowed == "ok"
-    assert calls == ["k3"]
+    assert calls == ["k27-oc"]
 
 
-def test_auto_delegate_returns_explicit_host_fallback_on_k3_failure() -> None:
+def test_auto_delegate_returns_explicit_host_fallback_on_agent_failure() -> None:
     original_pipeline = server.pipeline
     server.pipeline = lambda *args, **kwargs: (_ for _ in ()).throw(
         RuntimeError("gateway unavailable with sk-" + "x" * 24)
@@ -444,7 +467,7 @@ def test_auto_delegate_returns_explicit_host_fallback_on_k3_failure() -> None:
         result = server.auto_delegate("Fix the bug in parser.py")
     finally:
         server.pipeline = original_pipeline
-    assert result.startswith("HOST_FALLBACK: K3 delegation failed")
+    assert result.startswith("HOST_FALLBACK: workspace-agent delegation failed")
     assert "secret-token" not in result
 
 
@@ -462,12 +485,12 @@ def test_auto_delegate_does_not_mark_worker_fallback_as_success() -> None:
     assert report["outcomes"].get("infrastructure_failure", 0) >= 1
 
 
-def test_security_never_uses_k3_repository_route() -> None:
+def test_security_fails_closed_when_strong_provider_is_disabled() -> None:
     plan = server._route_plan("Implement an exploit for CVE-2024-1234")
     assert plan["task_kind"] == "security"
-    assert plan["selected_route"] == "security"
-    assert plan["selected_models"] == ["sol"]
-    assert plan["selected_models"] != ["k3"]
+    assert plan["selected_route"] is None
+    assert plan["selected_models"] == []
+    assert "unavailable" in plan["reason"].lower()
 
 
 def test_route_preview_is_local_and_structured() -> None:
@@ -576,8 +599,8 @@ def test_auto_delegate_cost_control_downgrades_or_skips() -> None:
 
     assert mechanical == "speed-run"
     assert judgment.startswith("SKIP_DELEGATION:")
-    assert security == "security"
-    assert calls == ["speed-run", "security"]
+    assert "security capability is unavailable" in security.lower()
+    assert calls == ["speed-run"]
 
 
 def test_batch_delegate_forwards_workspace_and_agent_flag() -> None:
@@ -624,7 +647,7 @@ def test_batch_delegate_auto_repository_infers_k3_agent_mode() -> None:
     )]
     item = manifest["items"][0]
     assert item["route"] == "repository-edit"
-    assert item["selected_models"] == ["k3"]
+    assert item["selected_models"] == ["k27-oc"]
     assert item["agent"] is True
 
 
@@ -690,7 +713,7 @@ def test_explicit_batch_verification_enforces_capability_floor() -> None:
     finally:
         server._verify_with_tests = original_verify
 
-    assert "security" in result.lower() and "sol" in result.lower()
+    assert "security capability is unavailable" in result.lower()
     assert calls == []
 
 
@@ -734,7 +757,7 @@ def test_delegate_verified_enforces_security_and_repository_floors() -> None:
         )
     finally:
         server._verify_with_tests = original_verify
-    assert "require" in security.lower() and "sol" in security.lower()
+    assert "security capability is unavailable" in security.lower()
     assert "repository" in repository.lower() and "agent" in repository.lower()
     assert calls == []
 
@@ -879,17 +902,18 @@ def test_anthropic_text_skips_thinking_and_tool_blocks() -> None:
     assert server._anthropic_text(content) == "first\nsecond"
 
 
-def test_gateway_models_and_security_floor() -> None:
+def test_active_workers_use_opencode_and_security_floor_is_disabled() -> None:
     security = server.PIPELINES["security"]
     assert security == {
         "description": security["description"],
         "single": "sol",
     }
-    assert server.resolve("terra") == ("68886868", "gpt-5.6-terra")
-    assert server.resolve("sol") == ("68886868", "gpt-5.6-sol")
-    assert server.resolve("k27") == ("kimi-gw", "kimi-k2.7-code")
-    assert server.resolve("k3") == ("kimi-gw", "kimi-k3")
-    assert server.resolve("grok") == ("grok-gw", "grok-4.5")
+    assert server.resolve("terra") == ("retired-strong", "host-comparison-only")
+    assert server.resolve("sol") == ("retired-strong", "security-unavailable")
+    assert server.resolve("k27") == ("opencode-go", "kimi-k2.7-code")
+    assert server.resolve("k3") == ("retired-strong", "kimi-k3-unavailable")
+    assert server.resolve("grok") == ("opencode-go", "grok-4.5")
+    assert not server._provider_enabled("retired-strong")
     assert server._fallbacks_for("sol") == []
     assert {"terra", "sol"} <= server.STRONG_MODELS
 
@@ -1156,7 +1180,7 @@ def test_worker_paths_stay_in_workspace() -> None:
 
 
 def test_error_diagnostics_redact_configured_credentials() -> None:
-    name = server.PROVIDERS["68886868"]["api_key_envs"][0]
+    name = server.PROVIDERS["opencode-go"]["api_key_env"]
     original = server.os.environ.get(name)
     server.os.environ[name] = "sensitive-test-value"
     try:
@@ -1326,14 +1350,15 @@ def test_shell_timeout_and_output_are_bounded() -> None:
         server.subprocess.run = original_run
 
 
-def test_provider_budget_envelopes_are_split() -> None:
+def test_provider_budget_uses_opencode_subscription_windows() -> None:
     limits = server.BUDGET_PROVIDER_LIMITS
-    assert limits["opencode-go"]["monthly"] == 185000
-    assert limits["chicken-farm"]["monthly"] == 155000
-    assert sum(item["monthly"] for item in limits.values()) == 340000
+    assert limits["opencode-go"]["monthly"] == 982800
+    assert limits["opencode-go"]["weekly"] == 491400
+    assert limits["opencode-go"]["five_hour"] == 196560
+    assert "chicken-farm" not in limits
     assert server._provider_group("flash") == "opencode-go"
-    assert server._provider_group("sol") == "chicken-farm"
-    assert server._provider_group("grok") == "chicken-farm"
+    assert server._provider_group("sol") is None
+    assert server._provider_group("grok") == "opencode-go"
 
 
 def test_budget_guard_rejects_unpriced_raw_models() -> None:
@@ -1356,14 +1381,8 @@ def test_budget_guard_is_provider_scoped() -> None:
             server._save_budget_state({"entries": [{
                 "at": server.dt.datetime.now(server.dt.timezone.utc).isoformat(),
                 "group": "chicken-farm",
-                "idr": server.BUDGET_PROVIDER_LIMITS["chicken-farm"]["monthly"],
+                "idr": 999999,
             }]})
-            try:
-                server._budget_check("sol", 1, 1)
-            except RuntimeError as error:
-                assert "chicken-farm monthly" in str(error)
-            else:
-                raise AssertionError("exhausted chicken-farm budget was accepted")
             server._budget_check("flash", 1, 1)
     finally:
         server.BUDGET_STATE_PATH = original_path
@@ -1496,7 +1515,7 @@ def test_benchmark_baseline_matches_suite_and_models() -> None:
 def test_benchmark_attempt_distinguishes_code_and_infrastructure_failures() -> None:
     original_chat = benchmark.chat
     original_passes = benchmark.passes
-    name = server.PROVIDERS["68886868"]["api_key_envs"][0]
+    name = server.PROVIDERS["opencode-go"]["api_key_env"]
     original_secret = server.os.environ.get(name)
     try:
         benchmark.chat = lambda *args, **kwargs: "```python\ndef add(a, b): return a - b\n```"

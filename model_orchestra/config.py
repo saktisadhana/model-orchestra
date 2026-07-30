@@ -63,6 +63,8 @@ def validate_config(config: dict[str, Any]) -> None:
     for name, provider in providers.items():
         if not isinstance(provider, dict):
             raise ValueError(f"provider {name!r} must be an object")
+        if not isinstance(provider.get("enabled", True), bool):
+            raise ValueError(f"provider {name!r} enabled must be a boolean")
         if not isinstance(provider.get("base_url"), str) or not provider["base_url"]:
             raise ValueError(f"provider {name!r} requires base_url")
         env_name = provider.get("api_key_env")
@@ -156,6 +158,8 @@ def credential_names(config: dict[str, Any]) -> tuple[str, ...]:
     names: set[str] = set()
     for provider in config.get("providers", {}).values():
         if not isinstance(provider, dict):
+            continue
+        if not provider.get("enabled", True):
             continue
         values = provider.get("api_key_envs") or [provider.get("api_key_env")]
         names.update(value for value in values if isinstance(value, str) and value)

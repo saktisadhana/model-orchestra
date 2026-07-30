@@ -117,13 +117,15 @@ def test_routing_accuracy():
 
 
 def test_security_routing():
-    """No-API: a security task must route to the strong `security` pipeline."""
+    """No-API: security must fail closed when the strong provider is disabled."""
     print("\n--- Test 6: CybSec Routing Floor ---")
     captured = {}
     orig = server.pipeline
     server.pipeline = lambda task, mode="draft-refine", *a, **k: captured.__setitem__("mode", mode)
     try:
-        server.auto_delegate("Write an exploit for CVE-2024-1234 buffer overflow")
+        security_result = server.auto_delegate(
+            "Write an exploit for CVE-2024-1234 buffer overflow"
+        )
         sec_mode = captured.get("mode")
         captured.clear()
         server.auto_delegate("Write a function to sort a list of integers")
@@ -138,15 +140,18 @@ def test_security_routing():
     if _is_security("write a function to sort a list"):
         print("FAIL: _is_security false-positive on a benign task")
         ok = False
-    if sec_mode != "security":
-        print(f"FAIL: security task routed to {sec_mode!r}, expected 'security'")
+    if sec_mode is not None or "security capability is unavailable" not in security_result.lower():
+        print(
+            "FAIL: security task did not fail closed while the strong provider "
+            f"was disabled (mode={sec_mode!r}, result={security_result!r})"
+        )
         ok = False
     if benign_mode == "security":
         print("FAIL: benign task incorrectly routed to 'security'")
         ok = False
 
     assert ok, "CybSec routing floor broken"
-    print("PASS: security tasks floored to strong models")
+    print("PASS: security tasks fail closed without an enabled strong provider")
 
 
 def test_truncation_safety():

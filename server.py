@@ -11,7 +11,7 @@ Tools exposed to the orchestrator:
   - pipeline(task, mode)                    -> composite recipe (draft+refine, swarm, etc.)
   - auto_delegate(task)                     -> capability-safe cost-aware routing
   - route_preview(task)                     -> inspect routing without a model call
-  - orchestrate_change(task, workspace)     -> K3 edit plus changed-file handoff
+  - orchestrate_change(task, workspace)     -> workspace-agent edit plus changed-file handoff
   - batch_delegate(tasks_json)              -> parallel work plus hashed manifest
   - orchestration_report()                  -> aggregate routing/agent telemetry
   - cost_report()                           -> session token usage summary
@@ -48,6 +48,8 @@ from typing import Any, Mapping
 from dotenv import load_dotenv
 from openai import OpenAI
 from mcp.server.fastmcp import FastMCP
+from model_orchestra import budget as budget_store
+from model_orchestra import dogfood
 
 ROOT = pathlib.Path(__file__).parent
 load_dotenv(ROOT / ".env")  # keys live in .env, never in .mcp.json
@@ -133,6 +135,9 @@ BUDGET_STATE_PATH = CONFIG_DIR / BUDGET.get(
 )
 BUDGET_DB_PATH = CONFIG_DIR / BUDGET.get(
     "database_file", ".model-orchestra-budget.sqlite3"
+)
+DOGFOOD_DB_PATH = CONFIG_DIR / BUDGET.get(
+    "dogfood_database_file", ".model-orchestra-dogfood.sqlite3"
 )
 AGENT_SHELL_MODE = CONFIG.get("agent_shell_mode", "deny")
 if AGENT_SHELL_MODE not in {"deny", "allowlist", "unrestricted"}:
@@ -317,34 +322,27 @@ def _spent_since(entries: list[dict[str, object]], group: str, since: dt.datetim
 
 @contextlib.contextmanager
 def _budget_connection():
-    BUDGET_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    connection = sqlite3.connect(BUDGET_DB_PATH, timeout=30, isolation_level=None)
-    try:
-        connection.execute("PRAGMA busy_timeout = 30000")
-        connection.execute("PRAGMA synchronous = FULL")
-        connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS budget_reservations (
-                operation_id TEXT PRIMARY KEY,
-                created_at TEXT NOT NULL,
-                group_name TEXT NOT NULL,
-                model TEXT NOT NULL,
-                reserved_idr INTEGER NOT NULL CHECK (reserved_idr >= 0),
-                state TEXT NOT NULL CHECK (
-                    state IN ('reserved', 'settled', 'pending_liability', 'void')
-                ),
-                actual_idr INTEGER,
-                settlement_id TEXT UNIQUE
-            )
-            """
-        )
+    with budget_store.connect(BUDGET_DB_PATH) as connection:
         connection.execute(
             "CREATE INDEX IF NOT EXISTS budget_reservations_group_time "
             "ON budget_reservations(group_name, created_at)"
         )
         yield connection
-    finally:
-        connection.close()
+
+
+def _legacy_spent_since(connection: sqlite3.Connection, group: str,
+                        since: dt.datetime) -> int:
+    migrated = connection.execute(
+        "SELECT COUNT(*) FROM budget_migrations"
+    ).fetchone()[0]
+    if migrated:
+        row = connection.execute(
+            "SELECT COALESCE(SUM(amount), 0) FROM legacy_budget_entries "
+            "WHERE group_name = ? AND created_at >= ?",
+            (group, since.isoformat()),
+        ).fetchone()
+        return int(row[0] or 0)
+    return _spent_since(_load_budget_state()["entries"], group, since)
 
 
 def _reserved_since(connection: sqlite3.Connection, group: str,
@@ -365,8 +363,12 @@ def _reserved_since(connection: sqlite3.Connection, group: str,
 
 
 def _budget_windows(now: dt.datetime) -> tuple[tuple[str, dt.datetime], ...]:
+    week_start = (now - dt.timedelta(days=now.weekday())).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
     return (
         ("monthly", now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)),
+        ("weekly", week_start),
         ("daily", now.replace(hour=0, minute=0, second=0, microsecond=0)),
         ("5-hour", now - dt.timedelta(hours=5)),
     )
@@ -387,7 +389,6 @@ def _budget_reserve(model: str, input_tokens: int, max_output_tokens: int) -> st
     now = dt.datetime.now(dt.timezone.utc)
     reserved = _usage_cost(pricing_model, input_tokens, max_output_tokens)
     limits = BUDGET_PROVIDER_LIMITS[group]
-    legacy_entries = _load_budget_state()["entries"]
     operation_id = uuid.uuid4().hex
     with _budget_connection() as connection:
         connection.execute("BEGIN IMMEDIATE")
@@ -395,7 +396,7 @@ def _budget_reserve(model: str, input_tokens: int, max_output_tokens: int) -> st
             key = "five_hour" if name == "5-hour" else name
             limit = int(limits.get(key, 0))
             spent = (
-                _spent_since(legacy_entries, group, since)
+                _legacy_spent_since(connection, group, since)
                 + _reserved_since(connection, group, since)
             )
             if limit and spent + reserved > limit:
@@ -418,6 +419,15 @@ def _budget_reserve(model: str, input_tokens: int, max_output_tokens: int) -> st
 def _budget_settle(operation_id: str, model: str, usage: Any,
                    settlement_id: str | None = None) -> None:
     if not operation_id:
+        return
+    input_usage = _usage_value(usage, "prompt_tokens")
+    if input_usage is None:
+        input_usage = _usage_value(usage, "input_tokens")
+    output_usage = _usage_value(usage, "completion_tokens")
+    if output_usage is None:
+        output_usage = _usage_value(usage, "output_tokens")
+    if input_usage is None or output_usage is None:
+        _budget_pending(operation_id)
         return
     inp, out, cached, written = _usage_components(usage)
     actual = _usage_cost(_pricing_alias(model), inp, out, cached, written)
@@ -465,13 +475,12 @@ def _budget_check(model: str, input_tokens: int, max_output_tokens: int) -> None
     worst_case = _usage_cost(pricing_model, input_tokens, max_output_tokens)
     limits = BUDGET_PROVIDER_LIMITS[group]
     with _STATE_LOCK:
-        entries = _load_budget_state()["entries"]
         with _budget_connection() as connection:
             windows = []
             for name, since in _budget_windows(now):
                 key = "five_hour" if name == "5-hour" else name
                 spent = (
-                    _spent_since(entries, group, since)
+                    _legacy_spent_since(connection, group, since)
                     + _reserved_since(connection, group, since)
                 )
                 windows.append((name, int(limits.get(key, 0)), spent))
@@ -640,7 +649,8 @@ def _append_orchestration_event(event: Mapping[str, Any]) -> None:
 def _track_orchestration(source: str, route: str | None, models: list[str],
                          outcome: str, fallback_category: str | None,
                          latency_seconds: float, tool_steps: int,
-                         returned_chars: int) -> None:
+                         returned_chars: int, *, task_kind: str = "unknown",
+                         economics: Mapping[str, Any] | None = None) -> None:
     """Record bounded metadata about one routing operation, never its prompt."""
     route_name = route or "host"
     safe_models = [str(model) for model in models]
@@ -690,6 +700,44 @@ def _track_orchestration(source: str, route: str | None, models: list[str],
             )
             model_entry["calls"] += 1
         _append_orchestration_event(event)
+    economic = dict(economics or {})
+    billing_mode = str(economic.get("billing_mode", "unknown"))
+    incremental_cash = economic.get("incremental_cash")
+    preserved_capacity = economic.get("strong_model_capacity_preserved", 0) or 0
+    pending_liability = economic.get("pending_liability", 0) or 0
+    unknown_cash = (
+        billing_mode not in {"subscription", "quota-equivalent", "free-tier"}
+        and incremental_cash is None
+    )
+    if unknown_cash:
+        pending_liability = max(float(pending_liability), float(preserved_capacity))
+        preserved_capacity = 0
+    try:
+        dogfood.record_event(
+            DOGFOOD_DB_PATH,
+            source=source,
+            task_kind=task_kind,
+            route=route_name,
+            models=safe_models,
+            outcome=outcome,
+            fallback_category=fallback_category,
+            latency_seconds=latency,
+            tool_steps=steps,
+            returned_chars=returned,
+            cash_outlay=(
+                incremental_cash or 0
+                if billing_mode != "subscription" else 0
+            ),
+            quota_consumed=(
+                economic.get("quota_equivalent", 0) or 0
+                if billing_mode == "subscription" else 0
+            ),
+            strong_capacity_preserved=preserved_capacity,
+            pending_liability=pending_liability,
+        )
+    except (OSError, ValueError, sqlite3.Error):
+        # Trial telemetry must never break the coding operation it observes.
+        pass
 
 
 def _record_capability_override(task_kind: str, model: str) -> None:
@@ -763,6 +811,18 @@ def resolve(model: str) -> tuple[str, str]:
     return provider, model_id
 
 
+def _provider_enabled(provider: str) -> bool:
+    return PROVIDERS.get(provider, {}).get("enabled", True) is True
+
+
+def _model_available(model: str) -> bool:
+    try:
+        provider, _ = resolve(model)
+    except (KeyError, TypeError, ValueError):
+        return False
+    return _provider_enabled(provider)
+
+
 def _keys_for(provider: str) -> list[str]:
     """Return configured API keys in deterministic failover order.
 
@@ -771,6 +831,8 @@ def _keys_for(provider: str) -> list[str]:
     only when none of those named variables are configured.
     """
     p = PROVIDERS[provider]
+    if not _provider_enabled(provider):
+        return []
     ordered_envs = p.get("api_key_envs", [])
     keys = [os.environ.get(name, "") for name in ordered_envs]
     if not any(keys):
@@ -789,6 +851,10 @@ def _keys_for(provider: str) -> list[str]:
 
 def client_for(provider: str, key: str | None = None):
     p = PROVIDERS[provider]
+    if not _provider_enabled(provider):
+        raise RuntimeError(
+            f"Provider {provider!r} is disabled; configure an eligible provider before use."
+        )
     if key is None:
         keys = _keys_for(provider)
         if not keys:
@@ -894,6 +960,17 @@ def _cap_input(text: str) -> str:
     """Keep a worker prompt under the model's context window so it never 502s
     with 'input exceeds context window'. Head+tail kept, middle dropped."""
     return _truncate(text, MAX_INPUT)
+
+
+def _estimate_input_tokens(*payloads: Any) -> int:
+    """Conservatively estimate every prompt component sent to a provider."""
+    characters = 0
+    for payload in payloads:
+        if isinstance(payload, str):
+            characters += len(payload)
+        elif payload is not None:
+            characters += len(json.dumps(payload, default=str, separators=(",", ":")))
+    return max(1, math.ceil(characters / max(CHARS_PER_TOKEN, 0.1)))
 
 
 # Must exceed the time to generate worker_max_tokens on a SLOW provider, or we
@@ -1080,7 +1157,7 @@ def chat(model: str, prompt: str, system: str = "", temperature: float = 0.2,
     output_tokens = max_tokens or WORKER_MAX_TOKENS
     budget_kwargs = {
         "budget_model": model,
-        "budget_input_tokens": len(prompt) // 4,
+        "budget_input_tokens": _estimate_input_tokens(prompt, system),
         "budget_output_tokens": output_tokens,
     }
     if is_anthropic:
@@ -1112,7 +1189,10 @@ def chat(model: str, prompt: str, system: str = "", temperature: float = 0.2,
 def _fallbacks_for(model: str) -> list[str]:
     """Return model failovers without weakening explicit capability floors."""
     if model in MODEL_FALLBACKS:
-        return list(MODEL_FALLBACKS[model])
+        return [
+            candidate for candidate in MODEL_FALLBACKS[model]
+            if _model_available(candidate)
+        ]
 
     order: list[str] = []
     for tier in TIERS.values():
@@ -1123,7 +1203,7 @@ def _fallbacks_for(model: str) -> list[str]:
     # dedup, drop the primary, keep order
     seen, out = {model}, []
     for m in order:
-        if m not in seen:
+        if m not in seen and _model_available(m):
             seen.add(m)
             out.append(m)
     return out
@@ -1574,8 +1654,8 @@ def _delegate_impl(task: str, model: str = "flash", agent: bool = False,
                 tools=anthropic_tools,
                 deadline=deadline,
                 budget_model=model,
-                budget_input_tokens=max(
-                    1, len(json.dumps(msgs, default=str)) // 4
+                budget_input_tokens=_estimate_input_tokens(
+                    sys_prompt, msgs, anthropic_tools
                 ),
                 budget_output_tokens=AGENT_MAX_TOKENS,
             )
@@ -1616,9 +1696,7 @@ def _delegate_impl(task: str, model: str = "flash", agent: bool = False,
             max_tokens=AGENT_MAX_TOKENS,
             deadline=deadline,
             budget_model=model,
-            budget_input_tokens=max(
-                1, len(json.dumps(msgs, default=str)) // 4
-            ),
+            budget_input_tokens=_estimate_input_tokens(msgs, AGENT_TOOLS),
             budget_output_tokens=AGENT_MAX_TOKENS,
         )
         _track(model, r.usage, record_legacy_budget=False)
@@ -1643,33 +1721,60 @@ def delegate(task: str, model: str = "flash", agent: bool = False,
              allow_economic_override: bool = False) -> str:
     """Send a task to a worker with an auditable capability guard.
 
-    Security work requires Sol. Workspace repository implementation with
-    ``agent=True`` requires K3. Mechanical stateless calls remain compatible;
+    Security work requires the configured security model. Workspace repository
+    implementation with ``agent=True`` requires the configured workspace agent.
+    Mechanical stateless calls remain compatible;
     an explicit override is available for deliberate, audited subparts only.
     """
     task = _cap_input(task)
     task_kind = _task_kind(task)
     security_task = _is_security(task)
     started = time.monotonic()
+    nested_orchestration = _ORCHESTRATION_COLLECTOR.get() is not None
+
+    def track_delegate(
+        route: str | None,
+        outcome: str,
+        fallback: str | None,
+        tool_steps: int,
+        returned_chars: int,
+        *,
+        economics: Mapping[str, Any] | None = None,
+    ) -> None:
+        if nested_orchestration:
+            return
+        _track_orchestration(
+            "delegate", route, [str(model)], outcome, fallback,
+            time.monotonic() - started, tool_steps, returned_chars,
+            task_kind=task_kind, economics=economics,
+        )
+
     override = bool(allow_capability_override)
+    if security_task and not override and not _model_available("sol"):
+        message = (
+            "ERROR: security capability is unavailable; configure an enabled "
+            "strong provider"
+        )
+        track_delegate(None, "blocked", "capability_unavailable", 0, len(message))
+        return message
+    if not _model_available(model):
+        message = f"ERROR: model {model!r} is unavailable because its provider is disabled"
+        track_delegate(None, "blocked", "provider_disabled", 0, len(message))
+        return message
     if security_task and not _model_matches(model, "sol"):
         if not override:
-            message = "ERROR: security tasks require the Sol model"
-            _track_orchestration(
-                "delegate", "security", [str(model)], "blocked", "capability_floor",
-                time.monotonic() - started, 0, len(message),
-            )
+            message = "ERROR: security tasks require the configured security model"
+            track_delegate("security", "blocked", "capability_floor", 0, len(message))
             return message
         _record_capability_override("security", model)
     if task_kind == "repository":
         if not agent and not override:
             message = (
-                "ERROR: repository tasks require agent=True with the K3 workspace "
+                "ERROR: repository tasks require agent=True with the configured workspace "
                 "route; use orchestrate_change"
             )
-            _track_orchestration(
-                "delegate", "repository-edit", [str(model)], "blocked", "capability_floor",
-                time.monotonic() - started, 0, len(message),
+            track_delegate(
+                "repository-edit", "blocked", "capability_floor", 0, len(message)
             )
             return message
         if agent and not _model_matches(model, IMPLEMENTATION_MODEL):
@@ -1678,9 +1783,8 @@ def delegate(task: str, model: str = "flash", agent: bool = False,
                     f"ERROR: repository agent tasks require {IMPLEMENTATION_MODEL}; "
                     "set allow_capability_override=true only for a deliberate subtask"
                 )
-                _track_orchestration(
-                    "delegate", "repository-edit", [str(model)], "blocked", "capability_floor",
-                    time.monotonic() - started, 0, len(message),
+                track_delegate(
+                    "repository-edit", "blocked", "capability_floor", 0, len(message)
                 )
                 return message
             _record_capability_override(task_kind, model)
@@ -1697,12 +1801,14 @@ def delegate(task: str, model: str = "flash", agent: bool = False,
                 "ERROR: direct model route fails the configured budget objective; "
                 "request an economic override (allow_economic_override=true) for a deliberate audited call"
             )
-            _track_orchestration(
-                "delegate", "direct-model", [str(model)], "blocked",
-                "economic_policy", time.monotonic() - started, 0, len(message),
+            track_delegate(
+                "direct-model", "blocked", "economic_policy", 0, len(message)
             )
             return message
         _record_economic_override(model)
+    route_name = (
+        "repository-edit" if task_kind == "repository" else "direct-model"
+    )
     operation = {"tool_steps": 0, "parent": _ORCHESTRATION_COLLECTOR.get()}
     operation_token = _ORCHESTRATION_COLLECTOR.set(operation)
     try:
@@ -1710,19 +1816,17 @@ def delegate(task: str, model: str = "flash", agent: bool = False,
             task, model=model, agent=agent, system=system, workspace=workspace
         )
     except Exception:
-        _track_orchestration(
-            "delegate", "repository-edit" if task_kind == "repository" else None,
-            [str(model)], "infrastructure_failure", "worker_error",
-            time.monotonic() - started, operation.get("tool_steps", 0), 0,
+        track_delegate(
+            route_name, "infrastructure_failure", "worker_error",
+            operation.get("tool_steps", 0), 0, economics=economic,
         )
         raise
     finally:
         _ORCHESTRATION_COLLECTOR.reset(operation_token)
     outcome, fallback = _agent_result_status(result) if agent else ("success", None)
-    _track_orchestration(
-        "delegate", "repository-edit" if task_kind == "repository" else None,
-        [str(model)], outcome, fallback, time.monotonic() - started,
-        operation.get("tool_steps", 0), len(str(result)),
+    track_delegate(
+        route_name, outcome, fallback, operation.get("tool_steps", 0),
+        len(str(result)), economics=economic,
     )
     return result
 
@@ -2063,10 +2167,17 @@ def pipeline(task: str, mode: str = "draft-refine", agent: bool = False,
         available = ", ".join(f'"{k}"' for k in PIPELINES)
         return f"Unknown pipeline mode {mode!r}. Available: {available}"
 
-    # Security work belongs on the Sol-only route before validating the requested
+    # Security work belongs on the configured strong route before validating the requested
     # implementation mode, so an explicit repository route cannot bypass the floor.
     if ENFORCE_SECURITY_FLOOR and _is_security(task) and mode != "security":
         mode, pipe = "security", PIPELINES["security"]
+
+    unavailable = [model for model in _pipe_models(pipe) if not _model_available(model)]
+    if unavailable:
+        return (
+            "ERROR: pipeline requires unavailable configured model(s): "
+            + ", ".join(sorted(set(unavailable)))
+        )
 
     if tests.strip() and agent:
         return "ERROR: pipeline verification is unavailable with agent=True"
@@ -2074,7 +2185,7 @@ def pipeline(task: str, mode: str = "draft-refine", agent: bool = False,
         return "ERROR: repository-edit requires agent=True"
     if agent and _task_kind(task) == "repository" and mode != "repository-edit":
         return (
-            "ERROR: repository implementation requires the K3 repository-edit route; "
+            "ERROR: repository implementation requires the configured repository-edit route; "
             "use orchestrate_change or auto_delegate"
         )
 
@@ -2274,12 +2385,15 @@ def _task_kind(task: str) -> str:
 def _capability_error(task: str, model: str, agent: bool = False) -> str | None:
     """Return a public execution error when a requested route violates a floor."""
     kind = _task_kind(task)
-    if kind == "security" and not _model_matches(model, "sol"):
-        return "ERROR: security tasks require the Sol model"
+    if kind == "security":
+        if not _model_available("sol"):
+            return "ERROR: security capability is unavailable; configure an enabled strong provider"
+        if not _model_matches(model, "sol"):
+            return "ERROR: security tasks require the configured security model"
     if kind == "repository":
         if not agent:
             return (
-                "ERROR: repository tasks require agent=True with the K3 workspace "
+                "ERROR: repository tasks require agent=True with the configured workspace "
                 "route; use orchestrate_change"
             )
         if not _model_matches(model, IMPLEMENTATION_MODEL):
@@ -2433,13 +2547,21 @@ def _direct_model_economics(task: str, model: str, system: str = "",
         and not metered_overage
     )
     clears_savings = saving_percent >= MINIMUM_SAVING_PERCENT
+    incremental_cash = (
+        0.0 if billing_mode == "subscription" and not metered_overage else None
+    )
     return {
         "eligible": preserves_strong_pool or clears_savings,
         "billing_mode": billing_mode,
         "metered_overage_enabled": metered_overage,
+        "incremental_cash": incremental_cash,
+        "quota_equivalent": end_to_end,
+        "strong_model_capacity_preserved": direct,
+        "pending_liability": 0.0,
         "estimated_cost": end_to_end,
         "direct_host_cost": direct,
         "saving_percent": saving_percent,
+        "currency": BUDGET_CURRENCY,
     }
 
 
@@ -2527,15 +2649,25 @@ def _route_plan(task: str, agent: bool = False, system: str = "",
     reason = ""
     capability_floor = {
         "security": "strong-only",
-        "repository": "workspace-agent-k3",
+        "repository": f"workspace-agent-{IMPLEMENTATION_MODEL}",
         "local": "host-local",
         "judgment": "host-judgment",
         "mechanical": "bounded-mechanical",
     }[kind]
 
     if kind == "security":
-        selected = "security"
-        reason = "Security capability floor: Sol is required and has no downgrade fallback."
+        if not _model_available("sol"):
+            selected = None
+            reason = (
+                "Security capability is unavailable because the configured strong "
+                "provider is disabled; do not substitute a weaker model."
+            )
+        else:
+            selected = "security"
+            reason = (
+                "Security capability floor: the configured security model is required "
+                "and has no downgrade fallback."
+            )
         security_estimate = estimates.get("security", {})
         security_cost = security_estimate.get("end_to_end_cost")
         if cap is not None and (
@@ -2556,7 +2688,11 @@ def _route_plan(task: str, agent: bool = False, system: str = "",
         within_cap = cap is None or (
             repository_cost is not None and float(repository_cost) <= cap
         )
-        if "repository-edit" in CAPABILITY_FIRST_ROUTES and within_cap:
+        if (
+            "repository-edit" in CAPABILITY_FIRST_ROUTES
+            and within_cap
+            and _model_available(IMPLEMENTATION_MODEL)
+        ):
             selected = "repository-edit"
             reason = (
                 "Substantial repository implementation is capability-first: use the "
@@ -2565,8 +2701,8 @@ def _route_plan(task: str, agent: bool = False, system: str = "",
         else:
             selected = None
             reason = (
-                "Repository implementation is capability-eligible but blocked by the "
-                "explicit cost cap; do not downgrade to a stateless worker."
+                "Repository implementation is unavailable or blocked by the explicit "
+                "cost cap; do not downgrade to a stateless worker."
             )
     elif not candidates:
         reason = "No capability-eligible delegation route is available."
@@ -2854,10 +2990,10 @@ def _bounded_orchestration_json(payload: Mapping[str, Any]) -> str:
 @mcp.tool()
 def orchestrate_change(task: str, workspace: str = ".", system: str = "",
                        max_cost_idr: float = 0.0) -> str:
-    """Run one substantial repository change through the K3 workspace agent.
+    """Run one substantial repository change through the configured workspace agent.
 
     The response is a bounded metadata handoff. It contains hashes and sizes for
-    changed files, never their contents. K3 is invoked at most once and is never
+    changed files, never their contents. The configured agent is invoked at most once and is never
     silently replaced by a cheaper worker; the host owns diff review and tests.
     """
     started = time.monotonic()
@@ -2927,7 +3063,8 @@ def orchestrate_change(task: str, workspace: str = ".", system: str = "",
     _track_orchestration(
         "orchestrate_change", plan.get("selected_route"), selected_models,
         status, fallback_category, elapsed, operation.get("tool_steps", 0),
-        len(result_text),
+        len(result_text), task_kind=str(plan.get("task_kind", "unknown")),
+        economics=plan.get("economics"),
     )
     decision = dict(plan) if plan else {
         "schema_version": 2,
@@ -3060,6 +3197,8 @@ def auto_delegate(task: str, agent: bool = False, system: str = "",
         _track_orchestration(
             "auto_delegate", None, models, "host_skip", fallback,
             time.monotonic() - started, 0, len(result),
+            task_kind=str(plan.get("task_kind", "unknown")),
+            economics=plan.get("economics"),
         )
         return result
 
@@ -3073,19 +3212,23 @@ def auto_delegate(task: str, agent: bool = False, system: str = "",
     except Exception as error:
         if plan.get("task_kind") == "repository" and effective_agent:
             result = (
-                "HOST_FALLBACK: K3 delegation failed; continue locally once. "
+                "HOST_FALLBACK: workspace-agent delegation failed; continue locally once. "
                 f"Diagnostic: {_safe_error(error)}"
             )
             _track_orchestration(
                 "auto_delegate", best, models, "infrastructure_failure",
                 "worker_error", time.monotonic() - started,
                 operation.get("tool_steps", 0), len(result),
+                task_kind=str(plan.get("task_kind", "unknown")),
+                economics=plan.get("economics"),
             )
             return result
         _track_orchestration(
             "auto_delegate", best, models, "infrastructure_failure",
             "worker_error", time.monotonic() - started,
             operation.get("tool_steps", 0), 0,
+            task_kind=str(plan.get("task_kind", "unknown")),
+            economics=plan.get("economics"),
         )
         raise
     finally:
@@ -3100,19 +3243,22 @@ def auto_delegate(task: str, agent: bool = False, system: str = "",
                 fallback_result = result_text
             else:
                 fallback_result = (
-                    "HOST_FALLBACK: K3 delegation returned no usable result; "
+                    "HOST_FALLBACK: workspace-agent delegation returned no usable result; "
                     "continue locally once."
                 )
             _track_orchestration(
                 "auto_delegate", best, models, outcome, fallback,
                 time.monotonic() - started,
                 operation.get("tool_steps", 0), len(fallback_result),
+                task_kind=str(plan.get("task_kind", "unknown")),
+                economics=plan.get("economics"),
             )
             return fallback_result
     _track_orchestration(
         "auto_delegate", best, models, "success", None,
         time.monotonic() - started, operation.get("tool_steps", 0),
-        len(result_text),
+        len(result_text), task_kind=str(plan.get("task_kind", "unknown")),
+        economics=plan.get("economics"),
     )
     return result
 

@@ -73,6 +73,7 @@
     "currency": "USD",
     "state_file": ".model-orchestra-budget.json",
     "database_file": ".model-orchestra-budget.sqlite3",
+    "dogfood_database_file": ".model-orchestra-dogfood.sqlite3",
     "provider_groups": {
       "openai-compatible": "metered-workers",
       "anthropic-compatible": "metered-strong"

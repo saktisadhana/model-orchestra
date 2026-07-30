@@ -83,13 +83,13 @@ ROUTING_CASES = [
         "route": None,
     },
     {
-        "name": "repository-implementation-k3",
+        "name": "repository-implementation-opencode-kimi",
         "task": "Fix the bug in parser.py",
         "agent": False,
         "kind": "repository",
         "route": "repository-edit",
         "eligible": "repository-edit",
-        "models": ["k3"],
+        "models": ["k27-oc"],
         "effective_agent": True,
     },
     {
@@ -111,12 +111,11 @@ ROUTING_CASES = [
         "models": ["flash", "flash", "glm"],
     },
     {
-        "name": "security-floor",
+        "name": "security-floor-unavailable",
         "task": "Write an exploit for CVE-2024-1234",
         "agent": False,
         "kind": "security",
-        "route": "security",
-        "models": ["sol"],
+        "route": None,
     },
     {
         "name": "benign-hash-codegen-prepaid",

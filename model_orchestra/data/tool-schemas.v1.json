@@ -54,7 +54,7 @@
       "name": "cost_report"
     },
     {
-      "description": "Send a task to a worker with an auditable capability guard.\n\n    Security work requires Sol. Workspace repository implementation with\n    ``agent=True`` requires K3. Mechanical stateless calls remain compatible;\n    an explicit override is available for deliberate, audited subparts only.\n    ",
+      "description": "Send a task to a worker with an auditable capability guard.\n\n    Security work requires the configured security model. Workspace repository\n    implementation with ``agent=True`` requires the configured workspace agent.\n    Mechanical stateless calls remain compatible;\n    an explicit override is available for deliberate, audited subparts only.\n    ",
       "inputSchema": {
         "properties": {
           "agent": {
@@ -153,7 +153,7 @@
       "name": "list_workers"
     },
     {
-      "description": "Run one substantial repository change through the K3 workspace agent.\n\n    The response is a bounded metadata handoff. It contains hashes and sizes for\n    changed files, never their contents. K3 is invoked at most once and is never\n    silently replaced by a cheaper worker; the host owns diff review and tests.\n    ",
+      "description": "Run one substantial repository change through the configured workspace agent.\n\n    The response is a bounded metadata handoff. It contains hashes and sizes for\n    changed files, never their contents. The configured agent is invoked at most once and is never\n    silently replaced by a cheaper worker; the host owns diff review and tests.\n    ",
       "inputSchema": {
         "properties": {
           "max_cost_idr": {

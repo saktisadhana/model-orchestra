@@ -12,14 +12,14 @@ assert resolve("k26") == ("opencode-go", "kimi-k2.6")
 assert resolve("glm") == ("opencode-go", "glm-5.2")
 assert resolve("glm51") == ("opencode-go", "glm-5.1")
 
-# ── Gateway models ──
-assert resolve("k27") == ("kimi-gw", "kimi-k2.7-code")
-assert resolve("k3") == ("kimi-gw", "kimi-k3")
-assert resolve("grok") == ("grok-gw", "grok-4.5")
-assert resolve("terra") == ("68886868", "gpt-5.6-terra")
-assert resolve("sol") == ("68886868", "gpt-5.6-sol")
-assert resolve("luna") == ("68886868", "gpt-5.6-luna")
-assert resolve("orchestrator-fallback") == ("68886868", "gpt-5.6-terra")
+# ── OpenCode premium workers and retired compatibility aliases ──
+assert resolve("k27") == ("opencode-go", "kimi-k2.7-code")
+assert resolve("k3") == ("retired-strong", "kimi-k3-unavailable")
+assert resolve("grok") == ("opencode-go", "grok-4.5")
+assert resolve("terra") == ("retired-strong", "host-comparison-only")
+assert resolve("sol") == ("retired-strong", "security-unavailable")
+assert resolve("luna") == ("retired-strong", "host-comparison-only")
+assert resolve("orchestrator-fallback") == ("retired-strong", "host-comparison-only")
 
 # ── Cross-provider twins (same model, different provider, for failover) ──
 assert resolve("k27-oc") == ("opencode-go", "kimi-k2.7-code")
@@ -46,27 +46,21 @@ for bad in ("nope", "unknownprovider/x", "openrouter"):
         pass
 
 
-# ── Family-aware failover: a fallback must leave the failing provider first,
-# and must never leave its own model family. `sol` must never downgrade.
-from server import _fallbacks_for, WORKERS
+# ── Failover: disabled providers must never be selected. ──
+from server import _fallbacks_for, _provider_enabled, WORKERS
 
-for model in ("k26", "k27", "glm", "glm51", "grok", "terra", "luna", "flash"):
+for model in ("k26", "k27", "glm", "glm51", "grok", "flash"):
     chain = _fallbacks_for(model)
-    home = resolve(model)[0]
     assert chain, f"{model} has no failover chain"
     assert all(m in WORKERS for m in chain), f"{model} chain has unknown alias: {chain}"
-    # A provider outage must be survivable: every chain has to leave its home
-    # provider at some point, or the whole chain dies with that provider.
-    assert any(resolve(m)[0] != home for m in chain), (
-        f"{model} chain never leaves provider {home!r}: {chain}")
+    assert all(_provider_enabled(resolve(m)[0]) for m in chain), (
+        f"{model} chain contains a disabled provider: {chain}"
+    )
 
-# Where a same-model twin exists on another provider, it must be tried FIRST,
-# because the usual failure is the provider, not the model.
-assert resolve(_fallbacks_for("k26")[0])[0] != resolve("k26")[0], (
-    "k26 must fail over off opencode-go first (cross-provider kimi)")
-assert _fallbacks_for("grok")[0] == "grok-oc", "grok must try its opencode twin first"
+assert resolve("k27") == resolve("k27-oc")
+assert resolve("grok") == resolve("grok-oc")
 
 assert _fallbacks_for("sol") == [], "sol must never downgrade (security floor)"
 
 print(f"ok - all {len(WORKERS)} workers + 2 raw passthroughs + 3 bad inputs "
-      "+ family-aware failover verified")
+      "+ enabled-provider failover verified")
