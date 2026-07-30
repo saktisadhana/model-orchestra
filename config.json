@@ -20,25 +20,10 @@
       "base_url": "https://api.sambanova.ai/v1",
       "api_key_env": "SAMBANOVA_API_KEY"
     },
-    "68886868": {
-      "base_url": "https://api.68886868.xyz",
-      "api_key_env": "API_68886868_KEY",
-      "api_key_envs": [
-        "C_LITE_1_API_KEY",
-        "C_LITE_2_API_KEY",
-        "C_PRO_API_KEY"
-      ],
-      "client": "anthropic"
-    },
-    "kimi-gw": {
-      "base_url": "https://api.68886868.xyz",
-      "api_key_env": "KIMI_GW_KEY",
-      "client": "anthropic"
-    },
-    "grok-gw": {
-      "base_url": "https://api.68886868.xyz",
-      "api_key_env": "GROK_GW_KEY",
-      "client": "anthropic"
+    "retired-strong": {
+      "enabled": false,
+      "base_url": "https://disabled.invalid/v1",
+      "api_key_env": "MODEL_ORCHESTRA_STRONG_API_KEY"
     }
   },
   "workers": {
@@ -46,24 +31,24 @@
     "flash": "opencode-go/deepseek-v4-flash",
     "ds-pro": "opencode-go/deepseek-v4-pro",
     "mimo-pro": "opencode-go/mimo-v2.5-pro",
-    "k27": "kimi-gw/kimi-k2.7-code",
+    "k27": "opencode-go/kimi-k2.7-code",
     "k26": "opencode-go/kimi-k2.6",
     "glm": "opencode-go/glm-5.2",
     "glm51": "opencode-go/glm-5.1",
-    "grok": "grok-gw/grok-4.5",
-    "k3": "kimi-gw/kimi-k3",
+    "grok": "opencode-go/grok-4.5",
+    "k3": "retired-strong/kimi-k3-unavailable",
     "k27-oc": "opencode-go/kimi-k2.7-code",
     "grok-oc": "opencode-go/grok-4.5",
-    "terra": "68886868/gpt-5.6-terra",
-    "sol": "68886868/gpt-5.6-sol",
-    "luna": "68886868/gpt-5.6-luna",
-    "orchestrator-fallback": "68886868/gpt-5.6-terra",
+    "terra": "retired-strong/host-comparison-only",
+    "sol": "retired-strong/security-unavailable",
+    "luna": "retired-strong/host-comparison-only",
+    "orchestrator-fallback": "retired-strong/host-comparison-only",
     "fast-nv": "nvidia/meta/llama-3.1-8b-instruct",
     "fast-groq": "groq/llama-3.3-70b-versatile",
     "fast-samba": "sambanova/Meta-Llama-3.3-70B-Instruct"
   },
   "pipelines": {
-    "_routing_note": "Capability eligibility is decided before economics. Substantial repository implementation uses the K3 workspace agent; architecture and final acceptance stay with the host; security stays on Sol. Measured mechanical throughput still controls stateless routes: auto_delegate uses one-shot Flash or SKIP_DELEGATION when those routes miss the saving floor.",
+    "_routing_note": "Capability eligibility is decided before economics. Substantial repository implementation uses the verified OpenCode Kimi 2.7 workspace agent; architecture and final acceptance stay with the host. Security fails closed while the retired strong provider is disabled.",
     "draft-refine": {
       "description": "General coding capability recipe. Flash drafts and GLM refines; auto routing uses it only when cost-effective.",
       "drafter": "flash",
@@ -120,8 +105,8 @@
       "single": "flash"
     },
     "repository-edit": {
-      "description": "Substantial workspace implementation. Kimi K3 edits with scoped agent tools; the host plans, reviews, and accepts.",
-      "single": "k3"
+      "description": "Substantial workspace implementation. OpenCode Kimi 2.7 edits with scoped agent tools; the host plans, reviews, and accepts.",
+      "single": "k27-oc"
     },
     "security": {
       "description": "CybSec, exploit, cryptography, malware, and forensics reasoning. GPT-5.6 Sol only.",
@@ -306,7 +291,7 @@
   "enforce_security_floor": true,
   "cost_control": {
     "host_model": "terra",
-    "implementation_model": "k3",
+    "implementation_model": "k27-oc",
     "objective": "preserve_strong_model",
     "capability_first_routes": [
       "repository-edit"
@@ -321,7 +306,7 @@
     "estimated_agent_steps": 2,
     "fallback_reserve_percent": 5.0,
     "verification_retry_reserve_percent": 20.0,
-    "verification_escalation_model": "k27",
+    "verification_escalation_model": "k27-oc",
     "chars_per_token": 4.0,
     "_note": "Routing estimates are conservative decision aids, not invoices. The default output estimate follows the measured six-task mean (~1537 tokens). A 5% fallback reserve keeps the proven 18.3% single-Flash path above the 10% saving floor without assuming failover is free. Repository implementation and security are capability-first routes; an explicit max_cost_idr cap can still block them."
   },
@@ -330,36 +315,28 @@
     "_host_comparison_note": "cost_control.host_model selects the comparison alias; its rates come from pricing_per_million_tokens below. Estimates are not provider invoices.",
     "state_file": ".model-orchestra-budget.json",
     "database_file": ".model-orchestra-budget.sqlite3",
+    "dogfood_database_file": ".model-orchestra-dogfood.sqlite3",
     "billing_modes": {
       "opencode-go": {
         "mode": "subscription",
-        "metered_overage_enabled": false
-      },
-      "chicken-farm": {
-        "mode": "metered",
-        "metered_overage_enabled": true
+        "metered_overage_enabled": false,
+        "subscription_fee": 10,
+        "subscription_currency": "USD"
       }
     },
-    "_provider_limits_note": "Self-consistent envelope: daily ~= monthly/30, five_hour = daily/2 so two full working windows fit in a day without breaking the monthly plan. The old five_hour values (2100/1750) were tighter than daily/2 and interrupted a single long session before the daily budget was anywhere near spent.",
+    "_provider_limits_note": "OpenCode Go limits are quota-equivalent windows, not cash invoices. Daily is unset because the subscription contract supplies 5-hour, weekly, and monthly windows.",
     "provider_limits": {
       "opencode-go": {
-        "monthly": 185000,
-        "daily": 6200,
-        "five_hour": 3100
-      },
-      "chicken-farm": {
-        "monthly": 155000,
-        "daily": 5200,
-        "five_hour": 2600
+        "monthly": 982800,
+        "weekly": 491400,
+        "daily": 0,
+        "five_hour": 196560
       }
     },
     "provider_groups": {
-      "opencode-go": "opencode-go",
-      "68886868": "chicken-farm",
-      "kimi-gw": "chicken-farm",
-      "grok-gw": "chicken-farm"
+      "opencode-go": "opencode-go"
     },
-    "_pricing_note": "Rates verified 2026-07-22 against provider dashboards. Gateway (68886868 / kimi-gw / grok-gw) quoted in HKD converted at 2100 IDR/HKD, using the codex-plus-cc (C_LITE_1, 0.1x) tier because that key is tried first; if the rotation falls through to C_PRO (codex-pro, 0.2x) real cost doubles. OpenCode Go quoted in USD converted at 16380 IDR/USD, and is additionally capped at $12/5h, $30/week, $60/month. Previously luna was 5x and terra/sol 2x overstated.",
+    "_pricing_note": "OpenCode Go quota-equivalent rates use the configured USD conversion and the documented $12/5h, $30/week, $60/month windows. Terra/Sol values are comparison estimates only while the retired strong provider is disabled; they cannot create provider calls.",
     "pricing_per_million_tokens": {
       "sol": {
         "input": 1050,

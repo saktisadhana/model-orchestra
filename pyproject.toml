@@ -9,7 +9,7 @@ description = "Policy-controlled, budget-aware multi-model coding delegation ove
 readme = "model_orchestra/PUBLIC_README.md"
 requires-python = ">=3.11"
 dependencies = [
-  "mcp>=1.2.0",
+  "mcp>=1.2.0,<2",
   "openai>=1.40.0",
   "python-dotenv>=1.0.0",
   "anthropic>=0.40.0",

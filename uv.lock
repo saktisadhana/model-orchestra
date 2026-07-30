@@ -515,7 +515,7 @@ requires-dist = [
     { name = "agent-client-protocol", marker = "extra == 'acp'", specifier = ">=0.11.0" },
     { name = "anthropic", specifier = ">=0.40.0" },
     { name = "build", marker = "extra == 'build'", specifier = ">=1.2.0" },
-    { name = "mcp", specifier = ">=1.2.0" },
+    { name = "mcp", specifier = ">=1.2.0,<2" },
     { name = "openai", specifier = ">=1.40.0" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
